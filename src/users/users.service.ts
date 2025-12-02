@@ -5,6 +5,10 @@ import { LoginMobileDto } from './dto/login-mobile.dto';
 import { firebaseAuth } from '../common/firebase/firebase-admin';
 import { JwtService } from '@nestjs/jwt';
 import { User } from './entities/user.entity';
+import { Farmhouse } from '../products/entities/farmhouse.entity';
+import { Location } from '../products/entities/location.entity';
+import { PriceOption } from '../products/entities/price-option.entity';
+import { FarmhouseImage } from '../products/entities/farmhouse-image.entity';
 
 interface OtpStorage {
   otp: string;
@@ -22,6 +26,7 @@ export class UsersService {
 
   constructor(
     @InjectModel(User) private userModel: typeof User,
+    @InjectModel(Farmhouse) private farmhouseModel: typeof Farmhouse,
     private jwtService: JwtService,
   ) { }
 
@@ -223,5 +228,213 @@ export class UsersService {
 
   async myProfile(userId: number) {
     return this.userModel.findByPk(userId);
+  }
+
+  async saveFarm(userId: number, productId: number) {
+    try {
+      const user = await this.userModel.findByPk(userId);
+      if (!user) {
+        throw new BadRequestException('User not found');
+      }
+
+      // Get current saved farms array
+      const savedFarms: number[] = (user.savedFarms as number[]) || [];
+
+      // Check if productId already exists
+      if (savedFarms.includes(productId)) {
+        // Remove it (toggle off)
+        const updatedFarms = savedFarms.filter(id => id !== productId);
+        await user.update({ savedFarms: updatedFarms } as any);
+        return {
+          success: true,
+          message: 'Farm removed from saved list',
+          savedFarms: updatedFarms,
+        };
+      } else {
+        // Add it (toggle on)
+        const updatedFarms = [...savedFarms, productId];
+        await user.update({ savedFarms: updatedFarms } as any);
+        return {
+          success: true,
+          message: 'Farm saved successfully',
+          savedFarms: updatedFarms,
+        };
+      }
+    } catch (error: any) {
+      throw new BadRequestException(error.message || 'Error saving farm');
+    }
+  }
+
+  async getSavedFarms(userId: number) {
+    try {
+      const user = await this.userModel.findByPk(userId);
+      if (!user) {
+        throw new BadRequestException('User not found');
+      }
+
+      const savedFarms: number[] = (user.savedFarms as number[]) || [];
+      
+      if (savedFarms.length === 0) {
+        return {
+          success: true,
+          savedFarms: [],
+          count: 0,
+        };
+      }
+
+      // Fetch full farm details
+      const farms = await this.farmhouseModel.findAll({
+        where: {
+          id: savedFarms,
+          status: true, // Only return active farms
+        },
+        include: [
+          {
+            model: Location,
+            as: 'location',
+          },
+          {
+            model: PriceOption,
+            as: 'priceOptions',
+          },
+          {
+            model: FarmhouseImage,
+            as: 'images',
+            attributes: ['id', 'imagePath', 'isMain', 'ordering'],
+            order: [['ordering', 'ASC'], ['isMain', 'DESC']],
+          },
+        ],
+      });
+
+      // Transform data
+      const farmsData = farms.map((farmhouse: any) => {
+        const farmhouseData = farmhouse.toJSON();
+        return {
+          id: farmhouseData.id,
+          name: farmhouseData.name,
+          slug: farmhouseData.slug,
+          maxPersons: farmhouseData.maxPersons,
+          bedrooms: farmhouseData.bedrooms,
+          isRecomanded: farmhouseData.isRecomanded,
+          isAmazing: farmhouseData.isAmazing,
+          farmNo: farmhouseData.farmNo,
+          description: farmhouseData.description,
+          images: farmhouseData.images?.map((img: any) => ({
+            id: img.id,
+            imagePath: `/uploads/farm-product/${img.imagePath}`,
+            isMain: img.isMain,
+            ordering: img.ordering,
+          })) || [],
+          location: farmhouseData.location || null,
+          rent: farmhouseData.priceOptions?.map((price: any) => ({
+            id: price.id,
+            category: price.category,
+            price: price.price,
+            maxPeople: price.maxPeople,
+          })) || [],
+        };
+      });
+      
+      return {
+        success: true,
+        savedFarms: farmsData,
+        count: farmsData.length,
+      };
+    } catch (error: any) {
+      throw new BadRequestException(error.message || 'Error fetching saved farms');
+    }
+  }
+
+  async getBookedFarms(userId: number) {
+    try {
+      const user = await this.userModel.findByPk(userId);
+      if (!user) {
+        throw new BadRequestException('User not found');
+      }
+
+      // Get booking history from user
+      const bookingHistory: any[] = (user.bookingHistory as any[]) || [];
+      
+      if (bookingHistory.length === 0) {
+        return {
+          success: true,
+          bookedFarms: [],
+          count: 0,
+        };
+      }
+
+      // Get unique farmhouse IDs from booking history
+      const farmhouseIds = [...new Set(bookingHistory.map(b => b.farmhouseId))];
+
+      // Fetch farm details
+      const farms = await this.farmhouseModel.findAll({
+        where: {
+          id: farmhouseIds,
+        },
+        include: [
+          {
+            model: Location,
+            as: 'location',
+          },
+          {
+            model: PriceOption,
+            as: 'priceOptions',
+          },
+          {
+            model: FarmhouseImage,
+            as: 'images',
+            attributes: ['id', 'imagePath', 'isMain', 'ordering'],
+            order: [['ordering', 'ASC'], ['isMain', 'DESC']],
+          },
+        ],
+      });
+
+      // Map farms with booking history
+      const bookedFarmsData = farms.map((farmhouse: any) => {
+        const farmhouseData = farmhouse.toJSON();
+        const farmBookings = bookingHistory.filter(b => b.farmhouseId === farmhouseData.id);
+        
+        return {
+          id: farmhouseData.id,
+          name: farmhouseData.name,
+          slug: farmhouseData.slug,
+          maxPersons: farmhouseData.maxPersons,
+          bedrooms: farmhouseData.bedrooms,
+          isRecomanded: farmhouseData.isRecomanded,
+          isAmazing: farmhouseData.isAmazing,
+          farmNo: farmhouseData.farmNo,
+          description: farmhouseData.description,
+          images: farmhouseData.images?.map((img: any) => ({
+            id: img.id,
+            imagePath: `/uploads/farm-product/${img.imagePath}`,
+            isMain: img.isMain,
+            ordering: img.ordering,
+          })) || [],
+          location: farmhouseData.location || null,
+          rent: farmhouseData.priceOptions?.map((price: any) => ({
+            id: price.id,
+            category: price.category,
+            price: price.price,
+            maxPeople: price.maxPeople,
+          })) || [],
+          bookings: farmBookings.map((booking: any) => ({
+            bookingDate: booking.bookingDate,
+            bookingType: booking.bookingType,
+            rent: booking.rent,
+            bookedAt: booking.bookedAt,
+          })),
+          totalBookings: farmBookings.length,
+        };
+      });
+      
+      return {
+        success: true,
+        bookedFarms: bookedFarmsData,
+        count: bookedFarmsData.length,
+        totalBookings: bookingHistory.length,
+      };
+    } catch (error: any) {
+      throw new BadRequestException(error.message || 'Error fetching booked farms');
+    }
   }
 }

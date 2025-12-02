@@ -23,29 +23,29 @@ export class FarmhouseImage extends Model<FarmhouseImage> {
     type: DataType.INTEGER,
     allowNull: false,
   })
-  farmhouseId: number;
+  declare farmhouseId: number;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
   })
-  imagePath: string;
+  declare imagePath: string;
 
   @Default(false)
   @Column({
     type: DataType.BOOLEAN,
     allowNull: false,
   })
-  isMain: boolean;
+  declare isMain: boolean;
 
   @Default(0)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  ordering: number;
+  declare ordering: number;
 
   @BelongsTo(() => Farmhouse, { foreignKey: 'farmhouseId', as: 'farmhouse' })
-  farmhouse: Farmhouse;
+  declare farmhouse: Farmhouse;
 }
 

@@ -22,39 +22,39 @@ export class Location extends Model<Location> {
     type: DataType.INTEGER,
     allowNull: false,
   })
-  farmhouseId: number;
+  declare farmhouseId: number;
 
   @Column({
     type: DataType.TEXT,
     allowNull: false,
   })
-  address: string;
+  declare address: string;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
   })
-  city: string;
+  declare city: string;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
   })
-  state: string;
+  declare state: string;
 
   @Column({
     type: DataType.DECIMAL(10, 8),
     allowNull: true,
   })
-  latitude: number;
+  declare latitude: number;
 
   @Column({
     type: DataType.DECIMAL(11, 8),
     allowNull: true,
   })
-  longitude: number;
+  declare longitude: number;
 
   @BelongsTo(() => Farmhouse, { foreignKey: 'farmhouseId', as: 'farmhouse' })
-  farmhouse: Farmhouse;
+  declare farmhouse: Farmhouse;
 }
 

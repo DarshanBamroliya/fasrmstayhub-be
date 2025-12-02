@@ -32,7 +32,7 @@ export class ProductsService {
   // Create Farmhouse (Admin only)
   async create(createFarmhouseDto: CreateFarmhouseDto) {
     try {
-      const { location, priceOptions, houseRules, ...farmhouseData } = createFarmhouseDto;
+      const { location, priceOptions, ...farmhouseData } = createFarmhouseDto;
 
       // Check if slug already exists
       const existingFarmhouse = await this.farmhouseModel.findOne({
@@ -64,15 +64,7 @@ export class ProductsService {
         );
       }
 
-      // Create house rules if provided
-      if (houseRules && houseRules.length > 0) {
-        await this.houseRuleModel.bulkCreate(
-          houseRules.map((rule) => ({
-            ...rule,
-            farmhouseId: farmhouse.id,
-          })) as any,
-        );
-      }
+      // House rules removed from create API
 
       // Fetch complete farmhouse with relations
       const createdFarmhouse = await this.findById(farmhouse.id);
@@ -80,6 +72,198 @@ export class ProductsService {
       return new ApiResponse(false, 'Farmhouse created successfully', createdFarmhouse.data);
     } catch (error) {
       return new ApiResponse(true, 'Error creating farmhouse', error.message);
+    }
+  }
+
+  // Update Farmhouse Status (Admin only)
+  async updateStatus(id: number, status: boolean) {
+    try {
+      const farmhouse = await this.farmhouseModel.findByPk(id);
+
+      if (!farmhouse) {
+        return new ApiResponse(true, 'Farmhouse not found', null);
+      }
+
+      await farmhouse.update({ status } as any);
+
+      return new ApiResponse(false, 'Farmhouse status updated successfully', {
+        id: farmhouse.id,
+        status,
+      });
+    } catch (error) {
+      return new ApiResponse(true, 'Error updating farmhouse status', error.message);
+    }
+  }
+
+  // Get All Farmhouses for Admin - Shows all farms regardless of status
+  async findAllForAdmin(queryDto: QueryFarmhouseDto) {
+    try {
+      const {
+        search,
+        city,
+        priority,
+        bedrooms,
+        minPrice,
+        maxPrice,
+        sort = SortOrder.PRIORITY,
+        page = 1,
+        limit = 10,
+      } = queryDto;
+
+      const offset = (page - 1) * limit;
+
+      // Build where clause (no status filter for admin)
+      const where: any = {};
+
+      if (priority) {
+        where.priority = priority;
+      }
+
+      if (bedrooms) {
+        where.bedrooms = bedrooms;
+      }
+
+      // Build location filter
+      const locationWhere: any = {};
+      if (city) {
+        locationWhere.city = city;
+      }
+      if (search) {
+        locationWhere.address = { [Op.like]: `%${search}%` };
+      }
+
+      // Build price filter
+      const priceWhere: any = {};
+      if (minPrice !== undefined) {
+        priceWhere.price = { [Op.gte]: minPrice };
+      }
+      if (maxPrice !== undefined) {
+        priceWhere.price = {
+          ...priceWhere.price,
+          [Op.lte]: maxPrice,
+        };
+      }
+
+      // Build order clause
+      let order: any[] = [];
+      switch (sort) {
+        case SortOrder.NEWEST:
+          order = [['createdAt', 'DESC']];
+          break;
+        case SortOrder.PRICE_LOW:
+          order = [
+            [{ model: PriceOption, as: 'priceOptions' }, 'price', 'ASC'],
+            [
+              Sequelize.literal(`CASE priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 END`),
+              'ASC',
+            ],
+          ];
+          break;
+        case SortOrder.PRICE_HIGH:
+          order = [
+            [{ model: PriceOption, as: 'priceOptions' }, 'price', 'DESC'],
+            [
+              Sequelize.literal(`CASE priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 END`),
+              'ASC',
+            ],
+          ];
+          break;
+        case SortOrder.PRIORITY:
+        default:
+          order = [
+            [
+              Sequelize.literal(`CASE priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 END`),
+              'ASC',
+            ],
+            ['createdAt', 'DESC'],
+          ];
+          break;
+      }
+
+      // If search is provided, search in farmhouse name OR location address
+      if (search) {
+        where[Op.or] = [
+          { name: { [Op.like]: `%${search}%` } },
+          { '$location.address$': { [Op.like]: `%${search}%` } },
+        ];
+      }
+
+      const { count, rows } = await this.farmhouseModel.findAndCountAll({
+        where,
+        include: [
+          {
+            model: Location,
+            as: 'location',
+            where: Object.keys(locationWhere).length > 0 && !search ? locationWhere : undefined,
+            required: false,
+          },
+          {
+            model: PriceOption,
+            as: 'priceOptions',
+            where: Object.keys(priceWhere).length > 0 ? priceWhere : undefined,
+            required: false,
+          },
+          {
+            model: FarmhouseImage,
+            as: 'images',
+            attributes: ['id', 'imagePath', 'isMain', 'ordering'],
+            separate: true,
+            order: [['ordering', 'ASC'], ['isMain', 'DESC']],
+          },
+        ],
+        order,
+        limit,
+        offset,
+        distinct: true,
+      });
+
+      // Transform data to return all fields including status
+      const farmhouses = rows.map((farmhouse: any) => {
+        const farmhouseData = farmhouse.toJSON();
+        return {
+          id: farmhouseData.id,
+          name: farmhouseData.name,
+          slug: farmhouseData.slug,
+          maxPersons: farmhouseData.maxPersons,
+          bedrooms: farmhouseData.bedrooms,
+          isRecomanded: farmhouseData.isRecomanded,
+          isAmazing: farmhouseData.isAmazing,
+          status: farmhouseData.status,
+          farmNo: farmhouseData.farmNo,
+          images: farmhouseData.images?.map((img: any) => ({
+            id: img.id,
+            imagePath: `/uploads/farm-product/${img.imagePath}`,
+            isMain: img.isMain,
+            ordering: img.ordering,
+          })) || [],
+          location: farmhouseData.location
+            ? {
+              id: farmhouseData.location.id,
+              address: farmhouseData.location.address,
+              city: farmhouseData.location.city,
+              state: farmhouseData.location.state,
+              latitude: farmhouseData.location.latitude,
+              longitude: farmhouseData.location.longitude,
+            }
+            : null,
+          rent: farmhouseData.priceOptions?.map((price: any) => ({
+            id: price.id,
+            category: price.category,
+            price: price.price,
+            maxPeople: price.maxPeople,
+          })) || [],
+        };
+      });
+
+      return new ApiResponse(false, 'Farmhouses fetched successfully', {
+        farmhouses,
+        total: count,
+        page,
+        limit,
+        totalPages: Math.ceil(count / limit),
+      });
+    } catch (error) {
+      return new ApiResponse(true, 'Error fetching farmhouses', error.message);
     }
   }
 
@@ -101,7 +285,9 @@ export class ProductsService {
       const offset = (page - 1) * limit;
 
       // Build where clause
-      const where: any = {};
+      const where: any = {
+        status: true, // Only show farms with status = true
+      };
 
       if (priority) {
         where.priority = priority;
@@ -216,6 +402,7 @@ export class ProductsService {
           bedrooms: farmhouseData.bedrooms,
           isRecomanded: farmhouseData.isRecomanded,
           isAmazing: farmhouseData.isAmazing,
+          farmNo: farmhouseData.farmNo,
           images: farmhouseData.images?.map((img: any) => ({
             id: img.id,
             imagePath: `/uploads/farm-product/${img.imagePath}`,
@@ -235,7 +422,6 @@ export class ProductsService {
           rent: farmhouseData.priceOptions?.map((price: any) => ({
             id: price.id,
             category: price.category,
-            hours: price.hours,
             price: price.price,
             maxPeople: price.maxPeople,
           })) || [],
@@ -325,7 +511,7 @@ export class ProductsService {
         return new ApiResponse(true, 'Farmhouse not found', null);
       }
 
-      const { location, priceOptions, houseRules, ...farmhouseData } = updateFarmhouseDto;
+      const { location, priceOptions, ...farmhouseData } = updateFarmhouseDto;
 
       // Update farmhouse
       if (Object.keys(farmhouseData).length > 0) {
@@ -361,18 +547,7 @@ export class ProductsService {
         );
       }
 
-      // Update house rules if provided
-      if (houseRules && houseRules.length > 0) {
-        // Delete existing rules
-        await this.houseRuleModel.destroy({ where: { farmhouseId: id } });
-        // Create new ones
-        await this.houseRuleModel.bulkCreate(
-          houseRules.map((rule) => ({
-            ...rule,
-            farmhouseId: id,
-          })) as any,
-        );
-      }
+      // House rules removed from update API
 
       // Fetch updated farmhouse
       const updatedFarmhouse = await this.findById(id);

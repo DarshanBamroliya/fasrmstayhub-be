@@ -25,16 +25,10 @@ export class PriceOption extends Model<PriceOption> {
   farmhouseId: number;
 
   @Column({
-    type: DataType.ENUM('REGULAR', 'WEEKEND', 'COUPLE'),
+    type: DataType.ENUM('REGULAR_12HR', 'REGULAR_24HR', 'WEEKEND_12HR', 'WEEKEND_24HR'),
     allowNull: false,
   })
-  category: 'REGULAR' | 'WEEKEND' | 'COUPLE';
-
-  @Column({
-    type: DataType.INTEGER,
-    allowNull: false,
-  })
-  hours: number;
+  category: 'REGULAR_12HR' | 'REGULAR_24HR' | 'WEEKEND_12HR' | 'WEEKEND_24HR';
 
   @Column({
     type: DataType.DECIMAL(10, 2),

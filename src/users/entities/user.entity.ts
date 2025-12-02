@@ -25,46 +25,64 @@ export class User extends Model<User> {
   // Optional (can be null if not set)
   @AllowNull(true)
   @Column(DataType.STRING)
-  name: string;
+  declare name: string;
 
   // Optional
   @AllowNull(true)
   @Column(DataType.STRING)
-  email: string;
+  declare email: string;
 
 
   // Optional
   @AllowNull(true)
   @Column(DataType.STRING)
-  mobileNo: string;
+  declare mobileNo: string;
 
   // Required: google / phone
   @AllowNull(false)
   @Default('phone')
   @Column(DataType.ENUM('google', 'phone'))
-  loginType: 'google' | 'phone';
+  declare loginType: 'google' | 'phone';
 
   // Optional
   @AllowNull(true)
   @Default(0)
   @Column(DataType.INTEGER)
-  totalOrders: number;
+  declare totalOrders: number;
 
   // Required
   @AllowNull(false)
   @Default(true)
   @Column(DataType.BOOLEAN)
-  isNewCustomer: boolean;
+  declare isNewCustomer: boolean;
 
   // Optional JSON Array
   @AllowNull(true)
   @Default([])
   @Column(DataType.JSON)
-  orderIds: number[];
+  declare orderIds: number[];
 
   @AllowNull(true)
   @Column(DataType.STRING)
-  profileImage: string;
+  declare profileImage: string;
+
+  // Saved farms - array of product IDs
+  @AllowNull(true)
+  @Default([])
+  @Column(DataType.JSON)
+  declare savedFarms: number[];
+
+  // Booking history - array of booking objects
+  @AllowNull(true)
+  @Default([])
+  @Column(DataType.JSON)
+  declare bookingHistory: any[];
+
+  // Flag to check if user has booked any farm
+  @AllowNull(true)
+  @Default(false)
+  @Column(DataType.BOOLEAN)
+  declare isAnyFarmBooked: boolean;
 
   @CreatedAt
   @Column({ type: DataType.DATE })

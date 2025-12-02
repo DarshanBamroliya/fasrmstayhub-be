@@ -28,72 +28,86 @@ export class Farmhouse extends Model<Farmhouse> {
     type: DataType.STRING,
     allowNull: false,
   })
-  name: string;
+  declare name: string;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
     unique: true,
   })
-  slug: string;
+  declare slug: string;
 
   @Column({
     type: DataType.ENUM('HIGH', 'MEDIUM', 'LOW'),
     allowNull: false,
     defaultValue: 'MEDIUM',
   })
-  priority: 'HIGH' | 'MEDIUM' | 'LOW';
+  declare priority: 'HIGH' | 'MEDIUM' | 'LOW';
 
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  maxPersons: number;
+  declare maxPersons: number;
 
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  bedrooms: number;
+  declare bedrooms: number;
 
   @Column({
     type: DataType.TEXT,
     allowNull: true,
   })
-  description: string;
+  declare description: string;
 
   @Column({
     type: DataType.TIME,
     allowNull: false,
   })
-  checkInFrom: string;
+  declare checkInFrom: string;
 
   @Column({
     type: DataType.TIME,
     allowNull: false,
   })
-  checkOutTo: string;
+  declare checkOutTo: string;
 
   @Default(true)
   @Column({
     type: DataType.BOOLEAN,
     allowNull: false,
   })
-  status: boolean;
+  declare status: boolean;
 
   @Default(false)
   @Column({
     type: DataType.BOOLEAN,
     allowNull: false,
   })
-  isRecomanded: boolean;
+  declare isRecomanded: boolean;
 
   @Default(false)
   @Column({
     type: DataType.BOOLEAN,
     allowNull: false,
   })
-  isAmazing: boolean;
+  declare isAmazing: boolean;
+
+  @Default(false)
+  @Column({
+    type: DataType.BOOLEAN,
+    allowNull: false,
+    comment: 'Most visited farm based on booking count',
+  })
+  declare isMostVisited: boolean;
+
+  @Column({
+    type: DataType.STRING,
+    allowNull: true,
+  })
+  declare farmNo: string;
 
   @CreatedAt
   @Column({ type: DataType.DATE })
@@ -105,18 +119,18 @@ export class Farmhouse extends Model<Farmhouse> {
 
   // Relations
   @HasOne(() => Location, { foreignKey: 'farmhouseId', as: 'location' })
-  location: Location;
+  declare location: Location;
 
   @HasMany(() => PriceOption, { foreignKey: 'farmhouseId', as: 'priceOptions' })
-  priceOptions: PriceOption[];
+  declare priceOptions: PriceOption[];
 
   @HasMany(() => HouseRule, { foreignKey: 'farmhouseId', as: 'houseRules' })
-  houseRules: HouseRule[];
+  declare houseRules: HouseRule[];
 
   @HasMany(() => FarmhouseImage, { foreignKey: 'farmhouseId', as: 'images' })
-  images: FarmhouseImage[];
+  declare images: FarmhouseImage[];
 
   @HasMany(() => FarmhouseAmenity, { foreignKey: 'farmhouseId', as: 'farmhouseAmenities' })
-  farmhouseAmenities: FarmhouseAmenity[];
+  declare farmhouseAmenities: FarmhouseAmenity[];
 }
 

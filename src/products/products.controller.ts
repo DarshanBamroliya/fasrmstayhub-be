@@ -71,13 +71,39 @@ export class ProductsController {
     return this.productsService.create(createFarmhouseDto);
   }
 
-  // Get All Farmhouses (Public) - Only images, locations, rent, maxPersons, bedrooms, isRecomanded, isAmazing
+  // Get All Farmhouses (Public) - Only shows farms with status = true
   @Public()
   @Get()
-  @ApiOperation({ summary: 'Get all farmhouses (Public)' })
+  @ApiOperation({ summary: 'Get all farmhouses (Public) - Only shows active farms' })
   @ApiResponse({ status: 200, description: 'Farmhouses fetched successfully.' })
   async findAll(@Query() queryDto: QueryFarmhouseDto): Promise<CustomApiResponse<any>> {
     return this.productsService.findAll(queryDto);
+  }
+
+  // Get All Farmhouses for Admin - Shows all farms regardless of status
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @Get('admin/all')
+  @ApiOperation({ summary: 'Get all farmhouses for admin (shows all including inactive)' })
+  @ApiResponse({ status: 200, description: 'Farmhouses fetched successfully.' })
+  async findAllForAdmin(@Query() queryDto: QueryFarmhouseDto): Promise<CustomApiResponse<any>> {
+    return this.productsService.findAllForAdmin(queryDto);
+  }
+
+  // Update Farmhouse Status (Admin only)
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @Patch(':id/status')
+  @ApiOperation({ summary: 'Update farmhouse status (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Farmhouse status updated successfully.' })
+  @ApiResponse({ status: 404, description: 'Farmhouse not found.' })
+  async updateStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { status: boolean },
+  ): Promise<CustomApiResponse<any>> {
+    return this.productsService.updateStatus(id, body.status);
   }
 
   // Get Farmhouse by ID (Public)

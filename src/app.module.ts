@@ -9,6 +9,8 @@ import { UsersModule } from './users/users.module';
 import { AdminModule } from './admin/admin.module';
 import { ProductsModule } from './products/products.module';
 import { StaticPageModule } from './Staticpage/Staticpage.module';
+import { SettingsModule } from './settings/settings.module';
+import { BookingModule } from './booking/booking.module';
 
 @Module({
   imports: [
@@ -18,7 +20,9 @@ import { StaticPageModule } from './Staticpage/Staticpage.module';
     UsersModule,
     AdminModule,
     ProductsModule,
-    StaticPageModule
+    StaticPageModule,
+    SettingsModule,
+    BookingModule
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

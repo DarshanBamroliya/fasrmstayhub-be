@@ -28,20 +28,12 @@ export class CreateLocationDto {
 
 export class CreatePriceOptionDto {
   @ApiProperty({ 
-    enum: ['REGULAR', 'WEEKEND', 'COUPLE'], 
+    enum: ['REGULAR_12HR', 'REGULAR_24HR', 'WEEKEND_12HR', 'WEEKEND_24HR'], 
     description: 'Price category',
-    example: 'REGULAR'
+    example: 'REGULAR_12HR'
   })
-  @IsEnum(['REGULAR', 'WEEKEND', 'COUPLE'])
-  category: 'REGULAR' | 'WEEKEND' | 'COUPLE';
-
-  @ApiProperty({ 
-    description: 'Number of hours',
-    example: 12
-  })
-  @IsInt()
-  @Min(1)
-  hours: number;
+  @IsEnum(['REGULAR_12HR', 'REGULAR_24HR', 'WEEKEND_12HR', 'WEEKEND_24HR'])
+  category: 'REGULAR_12HR' | 'REGULAR_24HR' | 'WEEKEND_12HR' | 'WEEKEND_24HR';
 
   @ApiProperty({ 
     description: 'Price amount',
@@ -129,17 +121,20 @@ export class CreateFarmhouseDto {
 
   @ApiPropertyOptional({ 
     type: [CreatePriceOptionDto], 
-    description: 'Price options (can add REGULAR and WEEKEND separately)',
+    description: 'Price options (12hr regular, 24hr regular, 12hr weekend, 24hr weekend)',
     example: [
-      { category: 'REGULAR', hours: 12, price: 1200, maxPeople: 10 },
-      { category: 'WEEKEND', hours: 12, price: 1500, maxPeople: 10 }
+      { category: 'REGULAR_12HR', price: 1200, maxPeople: 10 },
+      { category: 'REGULAR_24HR', price: 2000, maxPeople: 10 },
+      { category: 'WEEKEND_12HR', price: 1500, maxPeople: 10 },
+      { category: 'WEEKEND_24HR', price: 2500, maxPeople: 10 }
     ]
   })
   @IsOptional()
   priceOptions?: CreatePriceOptionDto[];
 
-  @ApiPropertyOptional({ type: [CreateHouseRuleDto], description: 'House rules' })
+  @ApiPropertyOptional({ description: 'Farm number (for multiple farms in one society)', example: 'Farm-1' })
   @IsOptional()
-  houseRules?: CreateHouseRuleDto[];
+  @IsString()
+  farmNo?: string;
 }
 
