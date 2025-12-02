@@ -49,7 +49,7 @@ const multerOptions = {
 };
 
 @ApiTags('Settings')
-@Controller('settings')
+@Controller('api/settings')
 export class SettingsController {
   constructor(private readonly settingsService: SettingsService) {}
 

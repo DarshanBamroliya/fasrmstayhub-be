@@ -23,7 +23,7 @@ export enum StaticPageTypeEnum {
   CANCELLATION_POLICY = 'cancellationPolicy',
 }
 
-@Controller('static-pages')
+@Controller('api/static-pages')
 export class StaticPageController {
   constructor(private readonly staticPageService: StaticPageService) {}
 

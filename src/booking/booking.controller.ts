@@ -23,7 +23,7 @@ import { Role } from 'src/common/enums/role.enum';
 import { Public } from 'src/common/decorators/public.decorator';
 
 @ApiTags('Bookings')
-@Controller('bookings')
+@Controller('api/bookings')
 export class BookingController {
   constructor(private readonly bookingService: BookingService) { }
 

@@ -16,7 +16,7 @@ import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { Public } from 'src/common/decorators/public.decorator';
 
 @ApiTags('Users')
-@Controller('users')
+@Controller('api/users')
 export class UsersController {
   constructor(private userService: UsersService) { }
 

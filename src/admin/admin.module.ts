@@ -4,12 +4,13 @@ import { AdminController } from './admin.controller';
 import { SequelizeModule } from '@nestjs/sequelize';
 import { Admin } from './entities/admin.entity';
 import { User } from '../users/entities/user.entity';
+import { Booking } from '../booking/entities/booking.entity';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 
 @Module({
   imports: [
-    SequelizeModule.forFeature([Admin, User]),
+    SequelizeModule.forFeature([Admin, User, Booking]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
@@ -25,4 +26,4 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
   providers: [AdminService],
   exports: [AdminService],
 })
-export class AdminModule {}
+export class AdminModule { }

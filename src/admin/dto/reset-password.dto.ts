@@ -6,7 +6,7 @@ export class ResetPasswordDto {
     @ApiProperty({ description: 'The reset token received from the user', type: String, example: 'resetToken123' })
     @IsString()
     @IsNotEmpty()
-    token: string;
+    access_token: string;
 
     @ApiProperty({ description: 'The new password for the user', type: String, example: 'Admin@123' })
     @IsString()

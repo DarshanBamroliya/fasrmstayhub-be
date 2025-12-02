@@ -6,16 +6,22 @@ import { RegisterAdminDto } from './dto/register-admin.dto';
 import { BulkDeleteUsersDto } from './dto/bulk-delete-users.dto';
 import { Admin } from './entities/admin.entity';
 import { User } from '../users/entities/user.entity';
+import { Booking } from '../booking/entities/booking.entity';
+import { Farmhouse } from '../products/entities/farmhouse.entity';
+import { Location } from '../products/entities/location.entity';
 import * as bcrypt from 'bcrypt';
 import { ApiResponse } from 'src/common/responses/api-response';
+import { UpdateAdminDto } from './dto/update-admin.dto';
+import { Op } from 'sequelize';
 
 @Injectable()
 export class AdminService {
   constructor(
     @InjectModel(Admin) private readonly adminModel: typeof Admin,
     @InjectModel(User) private readonly userModel: typeof User,
+    @InjectModel(Booking) private readonly bookingModel: typeof Booking,
     private jwtService: JwtService,
-  ) {}
+  ) { }
 
   // **Admin Register API**
   async registerAdmin(registerAdminDto: RegisterAdminDto) {
@@ -40,14 +46,19 @@ export class AdminService {
         status: 'active',
       } as any);
 
-      // Generate JWT token
-      const token = this.generateToken(admin);
+      // Generate JWT access_token
+      const access_token = this.generateaccess_token(admin);
 
       // Remove password from admin data
       const adminData: any = admin.toJSON();
       delete adminData.password;
 
-      return new ApiResponse(false, 'Success', adminData, token);
+      return new ApiResponse(
+        false,
+        'Success',
+        adminData,
+        access_token, // will be used as token
+      );
     } catch (error) {
       return new ApiResponse(true, 'Error during admin registration', error.message);
     }
@@ -58,62 +69,96 @@ export class AdminService {
     const { email, password } = loginAdminDto;
 
     try {
-      // Validate input
       if (!email || !password) {
         return new ApiResponse(true, 'Email and password are required', null);
       }
 
-      // Check if admin exists
       const admin = await this.adminModel.findOne({ where: { email } });
 
       if (!admin) {
         return new ApiResponse(true, 'Invalid credentials', null);
       }
 
-      // Check if password exists in database
       if (!admin.password) {
         return new ApiResponse(true, 'Admin account has no password set', null);
       }
 
-      // Check password
       const isPasswordValid = await bcrypt.compare(password, admin.password);
       if (!isPasswordValid) {
         return new ApiResponse(true, 'Invalid credentials', null);
       }
 
-      // Check if admin is active
       if (admin.status !== 'active') {
         return new ApiResponse(true, 'Admin account is inactive', null);
       }
 
-      // Generate JWT token
-      const token = this.generateToken(admin);
+      const access_token = this.generateaccess_token(admin);
 
-      // Remove password from admin data
       const adminData: any = admin.toJSON();
       delete adminData.password;
 
-      return new ApiResponse(false, 'Success', adminData, token);
+      // Add role static data
+      adminData.role = 'admin';
+
+      return new ApiResponse(false, 'Success', adminData, access_token);
+
     } catch (error: any) {
-      // Better error handling
-      const errorMessage = error?.message || 'Error during admin login';
-      return new ApiResponse(true, errorMessage, null);
+      return new ApiResponse(true, error?.message || 'Error during admin login', null);
     }
   }
 
+
   // **Get All Users API**
-  async getAllUsers() {
+  async getAllUsers(query: any) {
     try {
-      const users = await this.userModel.findAll({
-        attributes: ['id', 'name', 'email', 'mobileNo', 'loginType', 'profileImage', 'createdAt', 'updatedAt'],
-        order: [['createdAt', 'DESC']],
+      const page = Number(query.page) || 1;
+      const limit = Number(query.limit) || 10;
+      const offset = (page - 1) * limit;
+      const search = query.search || '';
+      const loginType = query.loginType || '';
+      const sort = query.sort?.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
+      const whereCondition: any = {};
+
+      if (search) {
+        whereCondition[Op.or] = [
+          { name: { [Op.like]: `%${search}%` } },
+          { email: { [Op.like]: `%${search}%` } },
+          { mobileNo: { [Op.like]: `%${search}%` } },
+        ];
+      }
+
+      if (loginType) {
+        whereCondition.loginType = loginType;
+      }
+
+      const { count, rows } = await this.userModel.findAndCountAll({
+        where: whereCondition,
+        attributes: [
+          'id', 'name', 'email', 'mobileNo',
+          'loginType', 'profileImage',
+          'createdAt', 'updatedAt',
+        ],
+        order: [['createdAt', sort]],
+        limit,
+        offset,
       });
 
-      return new ApiResponse(false, 'Users fetched successfully', users);
+      return new ApiResponse(false, 'Users fetched successfully', {
+        users: rows,
+        pagination: {
+          totalUsers: count,
+          page,
+          limit,
+          totalPages: Math.ceil(count / limit),
+        },
+      });
+
     } catch (error) {
       return new ApiResponse(true, 'Error fetching users', error.message);
     }
   }
+
 
   // **Get Admin Profile API**
   async getProfile(adminId: number) {
@@ -158,8 +203,8 @@ export class AdminService {
     }
   }
 
-  // **Private Helper: Generate JWT Token**
-  private generateToken(admin: Admin) {
+  // **Private Helper: Generate JWT access_token**
+  private generateaccess_token(admin: Admin) {
     const payload = {
       id: admin.id,
       email: admin.email,
@@ -170,4 +215,143 @@ export class AdminService {
 
     return this.jwtService.sign(payload);
   }
+
+  async updateProfile(adminId: number, updateAdminDto: UpdateAdminDto) {
+    try {
+      const admin = await this.adminModel.findByPk(adminId);
+
+      if (!admin) {
+        return new ApiResponse(true, 'Admin not found', null);
+      }
+
+      const { firstName, lastName, email, password } = updateAdminDto;
+
+      // If email is being updated → Check already exists
+      if (email && email !== admin.email) {
+        const existingEmail = await this.adminModel.findOne({ where: { email } });
+        if (existingEmail && existingEmail.id !== adminId) {
+          return new ApiResponse(true, 'Email already exists', null);
+        }
+        admin.email = email;
+      }
+
+      // Hash password if updating
+      if (password) {
+        admin.password = await bcrypt.hash(password, 10);
+      }
+
+      // Update other fields
+      if (firstName) admin.firstName = firstName;
+      if (lastName) admin.lastName = lastName;
+
+      await admin.save();
+
+      const adminData: any = admin.toJSON();
+      delete adminData.password;
+
+      return new ApiResponse(false, 'Profile updated successfully', adminData);
+
+    } catch (error: any) {
+      const errorMessage = error?.message || 'Error updating profile';
+      return new ApiResponse(true, errorMessage, null);
+    }
+  }
+
+  // **Get User Details API (Admin only)**
+  async getUserDetails(userId: number) {
+    try {
+      // Fetch user data
+      const user = await this.userModel.findByPk(userId, {
+        attributes: [
+          'id', 'name', 'email', 'mobileNo',
+          'loginType', 'createdAt', 'updatedAt',
+        ],
+      });
+
+      if (!user) {
+        return new ApiResponse(true, 'User not found', null);
+      }
+
+      // Fetch all bookings for this user with farm and location details
+      const bookings = await this.bookingModel.findAll({
+        where: { userId },
+        include: [
+          {
+            model: Farmhouse,
+            as: 'farmhouse',
+            attributes: ['id', 'name', 'slug'],
+            include: [
+              {
+                model: Location,
+                as: 'location',
+                attributes: ['address', 'city', 'state'],
+              },
+            ],
+          },
+        ],
+        order: [['createdAt', 'DESC']],
+      });
+
+      // Calculate payment statistics
+      let totalPaymentReceived = 0;
+      let totalPaymentPending = 0;
+
+      const bookingDetails = bookings.map((booking: any) => {
+        const bookingJson = booking.toJSON();
+        const finalPrice = parseFloat(bookingJson.finalPrice) || 0;
+
+        // Calculate payments based on payment status
+        if (bookingJson.paymentStatus === 'paid') {
+          totalPaymentReceived += finalPrice;
+        } else if (bookingJson.paymentStatus === 'partial' || bookingJson.paymentStatus === 'incomplete') {
+          totalPaymentPending += finalPrice;
+        }
+
+        // Format location
+        const location = bookingJson.farmhouse?.location
+          ? `${bookingJson.farmhouse.location.city}, ${bookingJson.farmhouse.location.state}`
+          : 'N/A';
+
+        return {
+          bookingId: bookingJson.id,
+          farmName: bookingJson.farmhouse?.name || 'N/A',
+          farmLocation: location,
+          bookingDate: bookingJson.bookingDate,
+          bookingEndDate: bookingJson.bookingEndDate,
+          bookingType: bookingJson.bookingType,
+          numberOfPersons: bookingJson.numberOfPersons,
+          originalPrice: parseFloat(bookingJson.originalPrice) || 0,
+          discountAmount: parseFloat(bookingJson.discountAmount) || 0,
+          finalPrice: finalPrice,
+          paymentStatus: bookingJson.paymentStatus,
+          createdAt: bookingJson.createdAt,
+        };
+      });
+
+      const totalPaymentAmount = totalPaymentReceived + totalPaymentPending;
+
+      const userDetails = {
+        userId: user.id,
+        name: user.name,
+        email: user.email,
+        mobileNo: user.mobileNo,
+        loginType: user.loginType,
+        profileImage: user.profileImage,
+        totalFarmBookings: bookings.length,
+        totalPaymentReceived: parseFloat(totalPaymentReceived.toFixed(2)),
+        totalPaymentPending: parseFloat(totalPaymentPending.toFixed(2)),
+        totalPaymentAmount: parseFloat(totalPaymentAmount.toFixed(2)),
+        bookings: bookingDetails,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      };
+
+      return new ApiResponse(false, 'User details fetched successfully', userDetails);
+
+    } catch (error: any) {
+      const errorMessage = error?.message || 'Error fetching user details';
+      return new ApiResponse(true, errorMessage, null);
+    }
+  }
+
 }

@@ -54,7 +54,7 @@ const multerOptions = {
 };
 
 @ApiTags('Products (Farmhouses)')
-@Controller('farmhouse')
+@Controller('api/farmhouse')
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) { }
 
