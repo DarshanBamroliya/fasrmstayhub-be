@@ -1,5 +1,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
+import { Op } from 'sequelize';
+import { ApiResponse } from 'src/common/responses/api-response';
 import { LoginGoogleDto } from './dto/login-google.dto';
 import { LoginMobileDto } from './dto/login-mobile.dto';
 import { firebaseAuth } from '../common/firebase/firebase-admin';
@@ -321,7 +323,7 @@ export class UsersService {
           description: farmhouseData.description,
           images: farmhouseData.images?.map((img: any) => ({
             id: img.id,
-            imagePath: `/uploads/farm-product/${img.imagePath}`,
+            imagePath: `uploads/farm-product/${img.imagePath}`,
             isMain: img.isMain,
             ordering: img.ordering,
           })) || [],
@@ -406,7 +408,7 @@ export class UsersService {
           description: farmhouseData.description,
           images: farmhouseData.images?.map((img: any) => ({
             id: img.id,
-            imagePath: `/uploads/farm-product/${img.imagePath}`,
+            imagePath: `uploads/farm-product/${img.imagePath}`,
             isMain: img.isMain,
             ordering: img.ordering,
           })) || [],
@@ -435,6 +437,47 @@ export class UsersService {
       };
     } catch (error: any) {
       throw new BadRequestException(error.message || 'Error fetching booked farms');
+    }
+  }
+
+  // Admin helper: create a new user (requires controller to protect with admin token)
+  async createUser(dto: any, createdBy?: number) {
+    try {
+      const { email, mobile, name } = dto;
+
+      if (!email && !mobile) {
+        return new ApiResponse(true, 'Either email or mobile is required', null);
+      }
+
+      const whereConditions: any[] = [];
+      if (email) whereConditions.push({ email });
+      if (mobile) whereConditions.push({ mobileNo: mobile });
+
+      const existing = await this.userModel.findOne({
+        where: { [Op.or]: whereConditions },
+      });
+
+      if (existing) {
+        return new ApiResponse(true, 'User with provided email/mobile already exists', null);
+      }
+
+      const payload: any = { name };
+      if (email) payload.email = email;
+      if (mobile) payload.mobileNo = mobile;
+      if (createdBy) payload.createdBy = createdBy;
+
+      const user = await this.userModel.create(payload as any);
+
+      const safeUser = {
+        id: user.id,
+        name: user.name,
+        email: user.email || null,
+        mobile: user.mobileNo || null,
+      };
+
+      return new ApiResponse(false, 'User created successfully', safeUser);
+    } catch (err: any) {
+      return new ApiResponse(true, 'Error creating user', err.message);
     }
   }
 }

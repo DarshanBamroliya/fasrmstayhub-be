@@ -32,7 +32,7 @@ export class DatabaseModule implements OnModuleInit {
   async onModuleInit() {
     // Sync database schema on startup (alter: true adds missing columns without dropping data)
     try {
-      await this.sequelize.sync({ alter: true });
+      await this.sequelize.sync();
       console.log('✅ Database schema synchronized');
     } catch (error) {
       console.error('❌ Database sync failed:', error);

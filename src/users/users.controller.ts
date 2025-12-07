@@ -1,24 +1,29 @@
-import {
-  Controller,
-  Post,
-  Body,
-  Get,
-  Put,
-  Req,
-  UseGuards,
-} from '@nestjs/common';
+import { Controller, Post, Body, Get, Put, Req, UseGuards } from '@nestjs/common';
 import { UsersService } from './users.service';
+import { CreateUserDto } from './dto/create-user.dto';
+import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
+import { Roles } from 'src/common/decorators/user.decorator';
+import { Role } from 'src/common/enums/role.enum';
 import { LoginGoogleDto } from './dto/login-google.dto';
 import { LoginMobileDto } from './dto/login-mobile.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
-import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { Public } from 'src/common/decorators/public.decorator';
 
 @ApiTags('Users')
 @Controller('api/users')
 export class UsersController {
   constructor(private userService: UsersService) { }
+
+  // Admin: create user with either email or mobile (requires admin role)
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @Post('create')
+  @ApiOperation({ summary: 'Admin: create a new user (email or mobile required)' })
+  async createUser(@Req() req, @Body() dto: CreateUserDto) {
+    return this.userService.createUser(dto, req.user?.id);
+  }
 
   @Public()
   @Post('google-login')

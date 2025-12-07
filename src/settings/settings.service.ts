@@ -31,19 +31,19 @@ export class SettingsService {
       
       // Transform file paths to full URLs
       const heroSliders = (settingsData.heroSliders || []).map((file: string) => 
-        file ? `/uploads/static-images/${file}` : null
+        file ? `uploads/static-images/${file}` : null
       ).filter((file: string | null) => file !== null);
 
       const appLogoLight = settingsData.appLogoLight 
-        ? `/uploads/static-images/${settingsData.appLogoLight}` 
+        ? `uploads/static-images/${settingsData.appLogoLight}` 
         : null;
       
       const appLogoDark = settingsData.appLogoDark 
-        ? `/uploads/static-images/${settingsData.appLogoDark}` 
+        ? `uploads/static-images/${settingsData.appLogoDark}` 
         : null;
 
       const loginDialogImage = settingsData.loginDialogImage 
-        ? `/uploads/static-images/${settingsData.loginDialogImage}` 
+        ? `uploads/static-images/${settingsData.loginDialogImage}` 
         : null;
 
       return new ApiResponse(false, 'Settings fetched successfully', {
@@ -149,7 +149,7 @@ export class SettingsService {
       }
 
       return new ApiResponse(false, 'Hero slider files uploaded successfully', {
-        uploadedFiles: uploadedFiles.map(f => `/uploads/static-images/${f}`),
+        uploadedFiles: uploadedFiles.map(f => `uploads/static-images/${f}`),
         totalSliders: updatedSliders.length,
       });
     } catch (error) {
@@ -224,7 +224,7 @@ export class SettingsService {
 
       return new ApiResponse(false, 'Logo uploaded successfully', {
         mode,
-        logoUrl: `/uploads/static-images/${filename}`,
+        logoUrl: `uploads/static-images/${filename}`,
       });
     } catch (error) {
       return new ApiResponse(true, 'Error uploading logo', error.message);
@@ -317,7 +317,7 @@ export class SettingsService {
       }
 
       return new ApiResponse(false, 'Login dialog image uploaded successfully', {
-        imageUrl: `/uploads/static-images/${filename}`,
+        imageUrl: `uploads/static-images/${filename}`,
       });
     } catch (error) {
       return new ApiResponse(true, 'Error uploading login dialog image', error.message);

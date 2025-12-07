@@ -33,7 +33,6 @@ export class Farmhouse extends Model<Farmhouse> {
   @Column({
     type: DataType.STRING,
     allowNull: false,
-    unique: true,
   })
   declare slug: string;
 

@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
-import { Op } from 'sequelize';
+import { Op, Sequelize } from 'sequelize';
 import { Booking } from './entities/booking.entity';
 import { Farmhouse } from '../products/entities/farmhouse.entity';
 import { PriceOption } from '../products/entities/price-option.entity';
@@ -11,6 +11,7 @@ import { CreateBookingDto } from './dto/create-booking.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
 import { QueryBookingDto } from './dto/query-booking.dto';
 import { ApiResponse } from 'src/common/responses/api-response';
+import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
 
 @Injectable()
 export class BookingService {
@@ -19,7 +20,7 @@ export class BookingService {
     @InjectModel(Farmhouse) private readonly farmhouseModel: typeof Farmhouse,
     @InjectModel(PriceOption) private readonly priceOptionModel: typeof PriceOption,
     @InjectModel(User) private readonly userModel: typeof User,
-  ) {}
+  ) { }
 
   // Calculate discount based on price
   private calculateDiscount(price: number, isLoggedIn: boolean): number {
@@ -58,11 +59,11 @@ export class BookingService {
 
     // Try to find existing user by mobile or email
     let user: User | null = null;
-    
+
     if (customerMobile) {
       user = await this.userModel.findOne({ where: { mobileNo: customerMobile } });
     }
-    
+
     if (!user && customerEmail) {
       user = await this.userModel.findOne({ where: { email: customerEmail } });
     }
@@ -95,6 +96,97 @@ export class BookingService {
     return 12; // Default
   }
 
+  // === Booking time helpers required by requirements ===
+  private calculateCheckIn(selectedDate: string | Date): Date {
+    const d = typeof selectedDate === 'string' ? new Date(selectedDate) : new Date(selectedDate as Date);
+    d.setHours(9, 0, 0, 0); // 09:00 AM
+    return d;
+  }
+
+  private calculateCheckOut(checkIn: Date, bookingType: string): Date {
+    const out = new Date(checkIn);
+    if (bookingType.includes('24HR')) {
+      out.setDate(out.getDate() + 1); // next day at same 09:00
+      out.setHours(9, 0, 0, 0);
+    } else {
+      // 12HR booking: same day 21:00
+      out.setHours(21, 0, 0, 0);
+    }
+    return out;
+  }
+
+  private calculateNextAvailableDate(checkOut: Date, bookingType: string): Date {
+    // For 12HR: available starting next day
+    // For 24HR: available starting day after checkout
+    const next = new Date(checkOut);
+    // move to date-only first
+    next.setHours(0, 0, 0, 0);
+    if (bookingType.includes('24HR')) {
+      // checkout is next day 09:00; available starting day after checkout
+      next.setDate(next.getDate() + 2);
+    } else {
+      // 12HR: available starting next day
+      next.setDate(next.getDate() + 1);
+    }
+    return next;
+  }
+
+  // derive checkIn/checkOut from an existing booking record
+  private deriveCheckInFromRecord(booking: any): Date {
+    // booking.bookingDate may include time; if not, use booking.bookingTimeFrom or default 09:00
+    const bd = booking.bookingDate ? new Date(booking.bookingDate) : null;
+    const base = bd ? new Date(bd) : new Date();
+    if (booking.bookingTimeFrom) {
+      const [h, m] = (booking.bookingTimeFrom || '09:00').split(':').map(Number);
+      base.setHours(h, m, 0, 0);
+    } else {
+      base.setHours(9, 0, 0, 0);
+    }
+    return base;
+  }
+
+  private deriveCheckOutFromRecord(booking: any): Date {
+    if (booking.bookingEndDate) {
+      const ed = new Date(booking.bookingEndDate);
+      if (booking.bookingTimeTo) {
+        const [h, m] = (booking.bookingTimeTo || '09:00').split(':').map(Number);
+        ed.setHours(h, m, 0, 0);
+      } else {
+        // if end date exists but no time, infer based on type
+        if (booking.bookingType && booking.bookingType.includes('24HR')) {
+          ed.setHours(9, 0, 0, 0);
+        } else {
+          ed.setHours(21, 0, 0, 0);
+        }
+      }
+      return ed;
+    }
+
+    // fallback: calculate from start and type
+    const ci = this.deriveCheckInFromRecord(booking);
+    return this.calculateCheckOut(ci, booking.bookingType || 'REGULAR_12HR');
+  }
+
+  private isOverlapping(existing: any, newCheckIn: Date, newCheckOut: Date): boolean {
+    const exCI = this.deriveCheckInFromRecord(existing);
+    const exCO = this.deriveCheckOutFromRecord(existing);
+
+    // overlap if newCI < exCO AND newCO > exCI
+    return newCheckIn < exCO && newCheckOut > exCI;
+  }
+
+  private getFarmhouseStatusForBooking(now: Date, booking: any): 'Available' | 'Booked' {
+    const ci = this.deriveCheckInFromRecord(booking);
+    const co = this.deriveCheckOutFromRecord(booking);
+    const nextAvailable = this.calculateNextAvailableDate(co, booking.bookingType || 'REGULAR_12HR');
+
+    if (now < ci) return 'Available';
+    if (now >= nextAvailable) return 'Available';
+    if (now >= ci && now < co) return 'Booked';
+    // fallback
+    return 'Available';
+  }
+
   // Calculate available dates based on booking (not stored in DB)
   private calculateAvailableDates(
     startDate: Date,
@@ -103,17 +195,17 @@ export class BookingService {
   ): { bookedDates: string[]; availableDates: string[] } {
     const bookedDates: string[] = [];
     const availableDates: string[] = [];
-    
+
     const start = new Date(startDate);
     start.setHours(0, 0, 0, 0);
     const end = new Date(endDate);
     end.setHours(0, 0, 0, 0);
-    
+
     const is24Hour = bookingType.includes('24HR');
-    
+
     // Start date is always booked
     bookedDates.push(start.toISOString().split('T')[0]);
-    
+
     if (is24Hour) {
       // For 24HR bookings: end date (checkout day) is available
       if (end.getTime() !== start.getTime()) {
@@ -125,7 +217,7 @@ export class BookingService {
       nextDay.setDate(nextDay.getDate() + 1);
       availableDates.push(nextDay.toISOString().split('T')[0]);
     }
-    
+
     return {
       bookedDates,
       availableDates,
@@ -142,10 +234,10 @@ export class BookingService {
       const bookingDateTime = new Date(`${bookingDate}T${bookingTimeFrom}`);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      
+
       const bookingDateOnly = new Date(bookingDate);
       bookingDateOnly.setHours(0, 0, 0, 0);
-      
+
       const isToday = bookingDateOnly.getTime() === today.getTime();
       const is24Hour = bookingType.includes('24HR');
       const is12Hour = bookingType.includes('12HR');
@@ -250,7 +342,7 @@ export class BookingService {
       // Check if user exists (by userId or reqUser)
       let finalUserId: number | null = null;
       let finalIsLoggedIn = false;
-      
+
       // If userId is provided, check if user exists
       if (userId) {
         const existingUser = await this.userModel.findByPk(userId);
@@ -259,29 +351,29 @@ export class BookingService {
           finalIsLoggedIn = true; // User exists, so they are logged in
         }
       }
-      
+
       // If reqUser is provided, use that
       if (!finalUserId && reqUser && reqUser.id) {
         finalUserId = reqUser.id;
         finalIsLoggedIn = true;
       }
-      
+
       // If user doesn't exist, create new user with isLoggedIn: false
       if (!finalUserId) {
         if (!customerName || (!customerMobile && !customerEmail)) {
           return new ApiResponse(true, 'Customer name and at least one of mobile/email are required', null);
         }
-        
+
         const user = await this.findOrCreateUser(customerName, customerMobile, customerEmail);
         finalUserId = user.id;
         finalIsLoggedIn = false; // New user created, not logged in
       }
-      
+
       // Override with provided isLoggedIn if explicitly set
       if (isLoggedIn !== undefined && isLoggedIn !== null) {
         finalIsLoggedIn = isLoggedIn;
       }
-      
+
       const loggedIn = finalIsLoggedIn;
 
       // Check if farmhouse exists
@@ -293,7 +385,7 @@ export class BookingService {
           },
         ],
       });
-      
+
       if (!farmhouse) {
         return new ApiResponse(true, 'Farmhouse not found', null);
       }
@@ -303,76 +395,34 @@ export class BookingService {
         return new ApiResponse(true, 'Farmhouse is not available', null);
       }
 
-      // Validate and calculate checkout time and end date based on booking type
-      const timeValidation = this.validateAndCalculateCheckoutTime(
-        bookingDate,
-        bookingTimeFrom,
-        bookingType
-      );
-
-      if (!timeValidation.isValid) {
-        return new ApiResponse(true, timeValidation.error || 'Invalid booking time', null);
-      }
-
-      // Use calculated checkout time if provided, otherwise use the provided one
-      const finalBookingTimeTo = timeValidation.calculatedCheckoutTime || bookingTimeTo || '22:00';
-      let bookingEndDate = timeValidation.calculatedEndDate || new Date(bookingDate);
-      
-      // For 12HR bookings, if checkout doesn't cross midnight, end date should be same as start date
+      // === Calculate definitive checkIn/checkOut and prevent overlapping bookings ===
+      // We enforce checkIn at 09:00 and calculate checkout from bookingType
+      const newCheckIn = this.calculateCheckIn(bookingDate);
+      const newCheckOut = this.calculateCheckOut(newCheckIn, bookingType);
       const is24Hour = bookingType.includes('24HR');
-      if (!is24Hour) {
-        const startDate = new Date(bookingDate);
-        startDate.setHours(0, 0, 0, 0);
-        const endDate = new Date(bookingEndDate);
-        endDate.setHours(0, 0, 0, 0);
-        
-        // Check if checkout time crosses midnight
-        const [checkoutHour] = finalBookingTimeTo.split(':').map(Number);
-        const [checkinHour] = bookingTimeFrom.split(':').map(Number);
-        
-        // If checkout hour is less than check-in hour, it crossed midnight
-        if (checkoutHour >= checkinHour) {
-          // Same day checkout, end date = start date
-          bookingEndDate = new Date(startDate);
+      const nextAvailableDate = this.calculateNextAvailableDate(newCheckOut, bookingType);
+
+      // Prepare standard times to store
+      const finalBookingTimeFrom = '09:00';
+      const finalBookingTimeTo = (() => {
+        const h = newCheckOut.getHours().toString().padStart(2, '0');
+        const m = newCheckOut.getMinutes().toString().padStart(2, '0');
+        return `${h}:${m}`;
+      })();
+
+      // 6. Prevent overlapping bookings - fetch all non-cancel bookings for this farmhouse and check in JS
+      const existingBookings = await this.bookingModel.findAll({
+        where: { farmhouseId, paymentStatus: { [Op.ne]: 'cancel' } },
+      });
+
+      for (const ex of existingBookings) {
+        if (this.isOverlapping(ex, newCheckIn, newCheckOut)) {
+          return new ApiResponse(true, 'Farmhouse already booked for this time', null);
         }
       }
 
-      // Check if dates are already booked (only for 24HR bookings)
-      if (is24Hour) {
-        const startDate = new Date(bookingDate);
-        startDate.setHours(0, 0, 0, 0);
-        const endDate = new Date(bookingEndDate);
-        endDate.setHours(23, 59, 59, 999);
-
-        // Check for overlapping bookings on the start date
-        const existingBooking = await this.bookingModel.findOne({
-          where: {
-            farmhouseId,
-            bookingDate: {
-              [Op.between]: [startDate, endDate],
-            },
-            paymentStatus: { [Op.ne]: 'cancel' },
-            bookingType: { [Op.like]: '%24HR%' },
-          },
-        });
-
-        if (existingBooking) {
-          return new ApiResponse(true, 'This date is already booked', null);
-        }
-      } else {
-        // For 12HR bookings, check only the booking date
-        const existingBooking = await this.bookingModel.findOne({
-          where: {
-            farmhouseId,
-            bookingDate: new Date(bookingDate),
-            paymentStatus: { [Op.ne]: 'cancel' },
-          },
-        });
-
-        if (existingBooking) {
-          return new ApiResponse(true, 'This date is already booked', null);
-        }
-      }
+      // Update bookingEndDate to the calculated checkOut datetime
+      let bookingEndDate = newCheckOut;
 
       // Get price from farm's price options if not provided, otherwise use provided price
       let finalPrice = originalPrice;
@@ -389,7 +439,7 @@ export class BookingService {
 
       // Calculate available dates (not stored in DB, just for response)
       const availableDates = this.calculateAvailableDates(
-        new Date(bookingDate),
+        newCheckIn,
         bookingEndDate,
         bookingType
       );
@@ -404,9 +454,9 @@ export class BookingService {
         customerName: loggedIn ? null : customerName,
         customerMobile: loggedIn ? null : customerMobile,
         customerEmail: loggedIn ? null : customerEmail,
-        bookingDate: new Date(bookingDate),
+        bookingDate: newCheckIn,
         bookingEndDate: bookingEndDate,
-        bookingTimeFrom,
+        bookingTimeFrom: finalBookingTimeFrom,
         bookingTimeTo: finalBookingTimeTo,
         bookingHours,
         numberOfPersons,
@@ -416,13 +466,13 @@ export class BookingService {
         finalPrice: finalPriceAfterDiscount,
         isLoggedIn: finalIsLoggedIn, // Always set to boolean value
         paymentStatus,
-        farmStatus: is24Hour ? 'unavailable' : 'available', // Mark as unavailable only for 24HR bookings
+        farmStatus: 'unavailable',
         bookingData,
         invoiceToken,
       } as any);
 
       // Update user booking history
-      await this.updateUserBookingHistory(finalUserId, farmhouseId, bookingDate, bookingType, finalPriceAfterDiscount);
+      await this.updateUserBookingHistory(finalUserId, farmhouseId, newCheckIn.toISOString().split('T')[0], bookingType, finalPriceAfterDiscount);
 
       // Update farmhouse most visited status
       await this.updateMostVisitedStatus(farmhouseId);
@@ -439,7 +489,7 @@ export class BookingService {
       // Provide more detailed error messages
       let errorMessage = 'Error creating booking';
       let errorData: any = null;
-      
+
       if (error.name === 'SequelizeValidationError') {
         // Get unique error messages (avoid duplicates)
         const uniqueErrors = new Map<string, string>();
@@ -461,7 +511,7 @@ export class BookingService {
         errorMessage = error.message;
         errorData = error.message;
       }
-      
+
       return new ApiResponse(true, errorMessage, errorData);
     }
   }
@@ -491,7 +541,7 @@ export class BookingService {
       });
 
       // Update user
-      await user.update({ 
+      await user.update({
         bookingHistory: bookingHistory,
         isAnyFarmBooked: true,
       } as any);
@@ -567,7 +617,7 @@ export class BookingService {
       const bookingData = booking.toJSON();
       const startDate = new Date(bookingData.bookingDate);
       startDate.setHours(0, 0, 0, 0);
-      
+
       // For end date, if it exists use it, otherwise use start date
       let endDate = startDate;
       if (bookingData.bookingEndDate) {
@@ -640,7 +690,7 @@ export class BookingService {
         const bookingData = booking.toJSON();
         const startDate = new Date(bookingData.bookingDate);
         startDate.setHours(0, 0, 0, 0);
-        
+
         // For end date, if it exists use it, otherwise calculate based on booking type
         let endDate = startDate;
         if (bookingData.bookingEndDate) {
@@ -686,10 +736,71 @@ export class BookingService {
   }
 
   // Get available farms for a specific date
-async getAvailableFarms(bookingDate?: string, bookingType?: string) {
-  try {
-    // If no date → return all active farms directly
-    if (!bookingDate) {
+  async getAvailableFarms(bookingDate?: string, bookingType?: string) {
+    try {
+      // If no date → return all active farms directly
+      if (!bookingDate) {
+        const allFarms = await this.farmhouseModel.findAll({
+          where: { status: true },
+          include: [
+            { model: PriceOption, as: 'priceOptions' },
+            { model: Location, as: 'location' },
+            {
+              model: FarmhouseImage,
+              as: 'images',
+              attributes: ['id', 'imagePath', 'isMain', 'ordering'],
+              separate: true,
+              order: [['ordering', 'ASC'], ['isMain', 'DESC']],
+              limit: 1,
+            },
+          ],
+        });
+
+        const farms = allFarms.map((farm: any) => {
+          const farmData = farm.toJSON();
+          return {
+            id: farmData.id,
+            name: farmData.name,
+            slug: farmData.slug,
+            farmNo: farmData.farmNo,
+            maxPersons: farmData.maxPersons,
+            bedrooms: farmData.bedrooms,
+            location: farmData.location
+              ? {
+                city: farmData.location.city,
+                address: farmData.location.address,
+              }
+              : null,
+            image: farmData.images?.[0]
+              ? `uploads/farm-product/${farmData.images[0].imagePath}`
+              : null,
+            price: null,
+            priceOptions:
+              farmData.priceOptions?.map((p: any) => ({
+                category: p.category,
+                price: parseFloat(p.price.toString()),
+                maxPeople: p.maxPeople,
+              })) || [],
+          };
+        });
+
+        return new ApiResponse(false, 'All farms fetched successfully', {
+          bookingDate: null,
+          bookingType: bookingType || 'all',
+          availableFarms: farms,
+          totalAvailable: farms.length,
+          totalFarms: farms.length,
+        });
+      }
+
+      // 🟦 If date exists → check availability based on booking type
+      const date = new Date(bookingDate);
+      date.setHours(0, 0, 0, 0);
+      const dateStr = date.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+      const nextDay = new Date(date);
+      nextDay.setDate(nextDay.getDate() + 1);
+      nextDay.setHours(0, 0, 0, 0);
+
       const allFarms = await this.farmhouseModel.findAll({
         where: { status: true },
         include: [
@@ -706,203 +817,190 @@ async getAvailableFarms(bookingDate?: string, bookingType?: string) {
         ],
       });
 
-      const farms = allFarms.map((farm: any) => {
-        const farmData = farm.toJSON();
-        return {
-          id: farmData.id,
-          name: farmData.name,
-          slug: farmData.slug,
-          farmNo: farmData.farmNo,
-          maxPersons: farmData.maxPersons,
-          bedrooms: farmData.bedrooms,
-          location: farmData.location
-            ? {
-                city: farmData.location.city,
-                address: farmData.location.address,
-              }
-            : null,
-          image: farmData.images?.[0]
-            ? `/uploads/farm-product/${farmData.images[0].imagePath}`
-            : null,
-          price: null,
-          priceOptions:
-            farmData.priceOptions?.map((p: any) => ({
-              category: p.category,
-              price: parseFloat(p.price.toString()),
-              maxPeople: p.maxPeople,
-            })) || [],
-        };
-      });
-
-      return new ApiResponse(false, 'All farms fetched successfully', {
-        bookingDate: null,
-        bookingType: bookingType || 'all',
-        availableFarms: farms,
-        totalAvailable: farms.length,
-        totalFarms: farms.length,
-      });
-    }
-
-    // 🟦 If date exists → check availability based on booking type
-    const date = new Date(bookingDate);
-    date.setHours(0, 0, 0, 0);
-    const dateStr = date.toISOString().split('T')[0]; // Format: YYYY-MM-DD
-    const nextDay = new Date(date);
-    nextDay.setDate(nextDay.getDate() + 1);
-    nextDay.setHours(0, 0, 0, 0);
-
-    const allFarms = await this.farmhouseModel.findAll({
-      where: { status: true },
-      include: [
-        { model: PriceOption, as: 'priceOptions' },
-        { model: Location, as: 'location' },
-        {
-          model: FarmhouseImage,
-          as: 'images',
-          attributes: ['id', 'imagePath', 'isMain', 'ordering'],
-          separate: true,
-          order: [['ordering', 'ASC'], ['isMain', 'DESC']],
-          limit: 1,
-        },
-      ],
-    });
-
-    // Get all bookings that could affect availability for this date
-    // For 24HR bookings: check if booking date or end date overlaps with requested date
-    // For 12HR bookings: only check if booking date matches
-    const bookings = await this.bookingModel.findAll({
-      where: {
-        paymentStatus: { [Op.ne]: 'cancel' },
-        [Op.or]: [
-          // 24HR bookings: check if start date or end date overlaps
-          {
-            bookingType: { [Op.like]: '%24HR%' },
-            [Op.or]: [
-              {
-                bookingDate: {
-                  [Op.gte]: date,
-                  [Op.lt]: nextDay,
+      // Get all bookings that could affect availability for this date
+      // For 24HR bookings: check if booking date or end date overlaps with requested date
+      // For 12HR bookings: only check if booking date matches
+      const bookings = await this.bookingModel.findAll({
+        where: {
+          paymentStatus: { [Op.ne]: 'cancel' },
+          [Op.or]: [
+            // 24HR bookings: check if start date or end date overlaps
+            {
+              bookingType: { [Op.like]: '%24HR%' },
+              [Op.or]: [
+                {
+                  bookingDate: {
+                    [Op.gte]: date,
+                    [Op.lt]: nextDay,
+                  },
                 },
-              },
-              {
-                bookingEndDate: {
-                  [Op.gte]: date,
-                  [Op.lt]: nextDay,
+                {
+                  bookingEndDate: {
+                    [Op.gte]: date,
+                    [Op.lt]: nextDay,
+                  },
                 },
-              },
-              {
-                bookingDate: { [Op.lte]: date },
-                bookingEndDate: { [Op.gte]: nextDay },
-              },
-            ],
-          },
-          // 12HR bookings: only check exact date match (same day)
-          {
-            bookingType: { [Op.like]: '%12HR%' },
-            bookingDate: {
-              [Op.gte]: date,
-              [Op.lt]: nextDay,
+                {
+                  bookingDate: { [Op.lte]: date },
+                  bookingEndDate: { [Op.gte]: nextDay },
+                },
+              ],
             },
-          },
-        ],
-      },
-      attributes: ['farmhouseId', 'bookingType', 'bookingDate', 'bookingEndDate', 'bookingTimeFrom', 'bookingTimeTo'],
-    });
+            // 12HR bookings: only check exact date match (same day)
+            {
+              bookingType: { [Op.like]: '%12HR%' },
+              bookingDate: {
+                [Op.gte]: date,
+                [Op.lt]: nextDay,
+              },
+            },
+          ],
+        },
+        attributes: ['farmhouseId', 'bookingType', 'bookingDate', 'bookingEndDate', 'bookingTimeFrom', 'bookingTimeTo'],
+      });
 
-    // Filter out farms that are booked
-    // For 24HR bookings: mark as unavailable if date overlaps
-    // For 12HR bookings: mark as unavailable if exact date matches
-    const bookedFarmhouseIds = new Set<number>();
-    
-    bookings.forEach((booking: any) => {
-      const bookingData = booking.toJSON();
-      const is24Hour = bookingData.bookingType?.includes('24HR');
-      
-      // Normalize dates for comparison
-      const bookingStartDate = new Date(bookingData.bookingDate);
-      bookingStartDate.setHours(0, 0, 0, 0);
-      const bookingDateStr = bookingStartDate.toISOString().split('T')[0];
-      const requestedDateStr = dateStr;
-      
-      if (is24Hour) {
-        // For 24HR bookings, mark start date as unavailable
-        if (bookingDateStr === requestedDateStr) {
-          bookedFarmhouseIds.add(bookingData.farmhouseId);
-        }
-        
-        // If end date exists and is different from start date, check if requested date is the end date
-        if (bookingData.bookingEndDate) {
-          const bookingEndDate = new Date(bookingData.bookingEndDate);
-          bookingEndDate.setHours(0, 0, 0, 0);
-          const bookingEndDateStr = bookingEndDate.toISOString().split('T')[0];
-          
-          // If the requested date is the end date (checkout day) and different from start
-          if (bookingEndDateStr === requestedDateStr && bookingDateStr !== requestedDateStr) {
-            // Check if current time is past checkout time
-            const [checkoutHour, checkoutMinute] = (bookingData.bookingTimeTo || '12:00').split(':').map(Number);
-            const now = new Date();
-            const checkoutTime = new Date(date);
-            checkoutTime.setHours(checkoutHour, checkoutMinute, 0, 0);
-            
-            // If it's before checkout time, still unavailable
-            if (now < checkoutTime) {
-              bookedFarmhouseIds.add(bookingData.farmhouseId);
+      // Filter out farms that are booked
+      // For 24HR bookings: mark as unavailable if date overlaps
+      // For 12HR bookings: mark as unavailable if exact date matches
+      const bookedFarmhouseIds = new Set<number>();
+
+      bookings.forEach((booking: any) => {
+        const bookingData = booking.toJSON();
+        const is24Hour = bookingData.bookingType?.includes('24HR');
+
+        // Normalize dates for comparison
+        const bookingStartDate = new Date(bookingData.bookingDate);
+        bookingStartDate.setHours(0, 0, 0, 0);
+        const bookingDateStr = bookingStartDate.toISOString().split('T')[0];
+        const requestedDateStr = dateStr;
+
+        if (is24Hour) {
+          // For 24HR bookings, mark start date as unavailable
+          if (bookingDateStr === requestedDateStr) {
+            bookedFarmhouseIds.add(bookingData.farmhouseId);
+          }
+
+          // If end date exists and is different from start date, check if requested date is the end date
+          if (bookingData.bookingEndDate) {
+            const bookingEndDate = new Date(bookingData.bookingEndDate);
+            bookingEndDate.setHours(0, 0, 0, 0);
+            const bookingEndDateStr = bookingEndDate.toISOString().split('T')[0];
+
+            // If the requested date is the end date (checkout day) and different from start
+            if (bookingEndDateStr === requestedDateStr && bookingDateStr !== requestedDateStr) {
+              // Check if current time is past checkout time
+              const [checkoutHour, checkoutMinute] = (bookingData.bookingTimeTo || '12:00').split(':').map(Number);
+              const now = new Date();
+              const checkoutTime = new Date(date);
+              checkoutTime.setHours(checkoutHour, checkoutMinute, 0, 0);
+
+              // If it's before checkout time, still unavailable
+              if (now < checkoutTime) {
+                bookedFarmhouseIds.add(bookingData.farmhouseId);
+              }
             }
           }
+        } else {
+          // For 12HR bookings, mark unavailable if exact date matches
+          if (bookingDateStr === requestedDateStr) {
+            bookedFarmhouseIds.add(bookingData.farmhouseId);
+          }
         }
-      } else {
-        // For 12HR bookings, mark unavailable if exact date matches
-        if (bookingDateStr === requestedDateStr) {
-          bookedFarmhouseIds.add(bookingData.farmhouseId);
-        }
-      }
-    });
+      });
 
-    const availableFarms = allFarms
-      .filter(farm => !bookedFarmhouseIds.has(farm.id))
-      .map((farm: any) => {
-        const farmData = farm.toJSON();
-        const priceOption = farmData.priceOptions?.find(
-          (p: any) => !bookingType || p.category === bookingType,
-        );
+      const availableFarms = allFarms
+        .filter(farm => !bookedFarmhouseIds.has(farm.id))
+        .map((farm: any) => {
+          const farmData = farm.toJSON();
+          const priceOption = farmData.priceOptions?.find(
+            (p: any) => !bookingType || p.category === bookingType,
+          );
 
-        return {
-          id: farmData.id,
-          name: farmData.name,
-          slug: farmData.slug,
-          farmNo: farmData.farmNo,
-          maxPersons: farmData.maxPersons,
-          bedrooms: farmData.bedrooms,
-          location: farmData.location
-            ? {
+          return {
+            id: farmData.id,
+            name: farmData.name,
+            slug: farmData.slug,
+            farmNo: farmData.farmNo,
+            maxPersons: farmData.maxPersons,
+            bedrooms: farmData.bedrooms,
+            location: farmData.location
+              ? {
                 city: farmData.location.city,
                 address: farmData.location.address,
               }
-            : null,
-          image: farmData.images?.[0]
-            ? `/uploads/farm-product/${farmData.images[0].imagePath}`
-            : null,
-          price: priceOption ? parseFloat(priceOption.price.toString()) : null,
-          priceOptions:
-            farmData.priceOptions?.map((p: any) => ({
-              category: p.category,
-              price: parseFloat(p.price.toString()),
-              maxPeople: p.maxPeople,
-            })) || [],
+              : null,
+            image: farmData.images?.[0]
+              ? `uploads/farm-product/${farmData.images[0].imagePath}`
+              : null,
+            price: priceOption ? parseFloat(priceOption.price.toString()) : null,
+            priceOptions:
+              farmData.priceOptions?.map((p: any) => ({
+                category: p.category,
+                price: parseFloat(p.price.toString()),
+                maxPeople: p.maxPeople,
+              })) || [],
+          };
+        });
+
+      return new ApiResponse(false, 'Available farms fetched successfully', {
+        bookingDate,
+        bookingType: bookingType || 'all',
+        availableFarms,
+        totalAvailable: availableFarms.length,
+        totalFarms: allFarms.length,
+      });
+    } catch (error) {
+      return new ApiResponse(true, 'Error fetching available farms', error.message);
+    }
+  }
+
+  // Get most booked farms (top -> bottom)
+  async getMostBookedFarms(query: { limit?: number; dateFrom?: string; dateTo?: string }) {
+    try {
+      const { limit = 10, dateFrom, dateTo } = query || {};
+
+      const where: any = { paymentStatus: { [Op.ne]: 'cancel' } };
+      if (dateFrom && dateTo) {
+        where.bookingDate = { [Op.between]: [new Date(dateFrom), new Date(dateTo)] };
+      } else if (dateFrom) {
+        where.bookingDate = { [Op.gte]: new Date(dateFrom) };
+      } else if (dateTo) {
+        where.bookingDate = { [Op.lte]: new Date(dateTo) };
+      }
+
+      const rows: any[] = await (this.bookingModel as any).findAll({
+        attributes: [
+          'farmhouseId',
+          [Sequelize.fn('COUNT', Sequelize.col('id')), 'bookingCount'],
+        ],
+        where,
+        group: ['farmhouseId'],
+        order: [[Sequelize.literal('bookingCount'), 'DESC']],
+        limit: Number(limit),
+        include: [
+          {
+            model: this.farmhouseModel,
+            as: 'farmhouse',
+            attributes: ['id', 'name', 'slug', 'farmNo'],
+            required: true,
+          },
+        ],
+      });
+
+      const data = rows.map(r => {
+        const json = r.toJSON ? r.toJSON() : r;
+        return {
+          farmhouseId: json.farmhouseId,
+          bookingCount: Number(json.bookingCount || 0),
+          farmhouse: json.farmhouse || null,
         };
       });
 
-    return new ApiResponse(false, 'Available farms fetched successfully', {
-      bookingDate,
-      bookingType: bookingType || 'all',
-      availableFarms,
-      totalAvailable: availableFarms.length,
-      totalFarms: allFarms.length,
-    });
-  } catch (error) {
-    return new ApiResponse(true, 'Error fetching available farms', error.message);
+      return new ApiResponse(false, 'Most booked farms fetched', data);
+    } catch (err: any) {
+      return new ApiResponse(true, 'Error fetching most booked farms', err.message);
+    }
   }
-}
 
 
   // Get farm availability (all bookings)
@@ -1026,7 +1124,7 @@ async getAvailableFarms(bookingDate?: string, bookingType?: string) {
           status: farmhouseData.status,
           location: farmhouseData.location || null,
           image: farmhouseData.images?.[0]
-            ? `/uploads/farm-product/${farmhouseData.images[0].imagePath}`
+            ? `uploads/farm-product/${farmhouseData.images[0].imagePath}`
             : null,
           priceOptions: farmhouseData.priceOptions?.map((p: any) => ({
             id: p.id,
@@ -1040,6 +1138,93 @@ async getAvailableFarms(bookingDate?: string, bookingType?: string) {
       });
     } catch (error) {
       return new ApiResponse(true, 'Error fetching farm availability', error.message);
+    }
+  }
+
+  // Get list of all farmhouses with booking status/bookingDate column
+  async getFarmsWithStatus(date?: string, page: number = 1, limit: number = 0) {
+    try {
+      const now = date ? new Date(date) : new Date();
+      // normalize now to full datetime
+
+      const allFarms = await this.farmhouseModel.findAll({
+        include: [
+          { model: Location, as: 'location' },
+          { model: PriceOption, as: 'priceOptions' },
+          {
+            model: FarmhouseImage,
+            as: 'images',
+            attributes: ['id', 'imagePath', 'isMain', 'ordering'],
+            separate: true,
+            order: [['ordering', 'ASC'], ['isMain', 'DESC']],
+            limit: 1,
+          },
+        ],
+      });
+
+      const results: any[] = [];
+
+      for (const farm of allFarms) {
+        const f = farm.toJSON();
+
+        // find bookings that are current or future (non-cancel)
+        const bookings = await this.bookingModel.findAll({
+          where: {
+            farmhouseId: f.id,
+            paymentStatus: { [Op.ne]: 'cancel' },
+          },
+          order: [['bookingDate', 'ASC']],
+        });
+
+        // pick the booking that affects current or next availability
+        let bookingStatus = 'Available';
+        let bookingDateLabel = 'Available';
+
+        for (const b of bookings) {
+          const bd = b.toJSON();
+          const ci = this.deriveCheckInFromRecord(bd);
+          const co = this.deriveCheckOutFromRecord(bd);
+          const nextAvailable = this.calculateNextAvailableDate(co, bd.bookingType || 'REGULAR_12HR');
+
+          // If booking is in future or currently overlapping
+          if (now < ci) {
+            // future booking -> show booked range
+            bookingStatus = 'Available';
+            bookingDateLabel = `${ci.toISOString()} - ${co.toISOString()}`;
+            break; // we show next booked range
+          }
+
+          if (now >= ci && now < co) {
+            bookingStatus = 'Booked';
+            bookingDateLabel = `${ci.toISOString()} - ${co.toISOString()}`;
+            break;
+          }
+
+          if (now >= nextAvailable) {
+            // this booking no longer affects availability; continue to next booking
+            continue;
+          }
+        }
+
+        results.push({
+          id: f.id,
+          name: f.name,
+          slug: f.slug,
+          farmNo: f.farmNo,
+          status: f.status ? 'Available' : 'Inactive',
+          bookingDate: bookingDateLabel,
+          bookingStatus,
+          location: f.location || null,
+          image: f.images?.[0] ? `uploads/farm-product/${f.images[0].imagePath}` : null,
+        });
+      }
+
+      return new ApiResponse(false, 'Farms with status fetched successfully', {
+        total: results.length,
+        farms: results,
+      });
+    } catch (error) {
+      return new ApiResponse(true, 'Error fetching farms with status', error.message);
     }
   }
 
@@ -1123,6 +1308,7 @@ async getAvailableFarms(bookingDate?: string, bookingType?: string) {
         paymentStatus,
         dateFrom,
         dateTo,
+        search,
       } = queryDto;
 
       const offset = (page - 1) * limit;
@@ -1151,21 +1337,47 @@ async getAvailableFarms(bookingDate?: string, bookingType?: string) {
         }
       }
 
+      // Handle search in a better way - use Op.or at the main query level
+      if (search) {
+        where[Op.or] = [
+          // Search in user fields (using association)
+          { '$user.name$': { [Op.iLike]: `%${search}%` } },
+          { '$user.email$': { [Op.iLike]: `%${search}%` } },
+          { '$user.mobileNo$': { [Op.iLike]: `%${search}%` } },
+          // Search in farmhouse fields
+          { '$farmhouse.name$': { [Op.iLike]: `%${search}%` } },
+          { '$farmhouse.slug$': { [Op.iLike]: `%${search}%` } },
+          // Search in booking fields directly (for guest bookings)
+          { customerName: { [Op.iLike]: `%${search}%` } },
+          { customerEmail: { [Op.iLike]: `%${search}%` } },
+          { customerMobile: { [Op.iLike]: `%${search}%` } },
+          // Search by invoice token
+          { invoiceToken: { [Op.iLike]: `%${search}%` } },
+          // Search by booking ID (if search looks like a number)
+          ...(isNaN(Number(search)) ? [] : [
+            { id: Number(search) }
+          ]),
+        ];
+      }
+
+      const includeConditions = [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'name', 'email', 'mobileNo'],
+          required: false, // Keep false to include bookings without users
+        },
+        {
+          model: Farmhouse,
+          as: 'farmhouse',
+          attributes: ['id', 'name', 'slug', 'farmNo'],
+          required: true, // Farmhouse is required for all bookings
+        },
+      ];
+
       const { count, rows } = await this.bookingModel.findAndCountAll({
         where,
-        include: [
-          {
-            model: User,
-            as: 'user',
-            attributes: ['id', 'name', 'email', 'mobileNo'],
-            required: false,
-          },
-          {
-            model: Farmhouse,
-            as: 'farmhouse',
-            attributes: ['id', 'name', 'slug', 'farmNo'],
-          },
-        ],
+        include: includeConditions,
         order: [['bookingDate', 'DESC']],
         limit,
         offset,
@@ -1220,7 +1432,7 @@ async getAvailableFarms(bookingDate?: string, bookingType?: string) {
       return new ApiResponse(true, 'Error fetching bookings', error.message);
     }
   }
-
+  
   // Get farm statistics (for admin)
   async getFarmStatistics(farmhouseId: number) {
     try {
@@ -1287,7 +1499,7 @@ async getAvailableFarms(bookingDate?: string, bookingType?: string) {
         const isLoggedIn = updateBookingDto.isLoggedIn ?? booking.isLoggedIn ?? false;
         const discountAmount = this.calculateDiscount(updateBookingDto.originalPrice, Boolean(isLoggedIn));
         const finalPrice = updateBookingDto.originalPrice - discountAmount;
-        
+
         updateData.discountAmount = discountAmount;
         updateData.finalPrice = finalPrice;
       }
@@ -1318,6 +1530,68 @@ async getAvailableFarms(bookingDate?: string, bookingType?: string) {
       return new ApiResponse(false, 'Booking deleted successfully', null);
     } catch (error) {
       return new ApiResponse(true, 'Error deleting booking', error.message);
+    }
+  }
+
+  // Update payment status
+  async updatePaymentStatus(id: number, updatePaymentStatusDto: UpdatePaymentStatusDto) {
+    try {
+      const { paymentStatus } = updatePaymentStatusDto;
+
+      const booking = await this.bookingModel.findByPk(id);
+      if (!booking) {
+        return new ApiResponse(true, 'Booking not found', null);
+      }
+
+      // Get existing booking data
+      const existingBookingData = booking.bookingData || {};
+
+      // Create payment history record
+      const paymentHistory = existingBookingData.paymentHistory || [];
+      paymentHistory.push({
+        fromStatus: booking.paymentStatus,
+        toStatus: paymentStatus,
+        updatedAt: new Date().toISOString(),
+      });
+
+      // Prepare update data
+      const updateData: any = {
+        paymentStatus,
+        bookingData: {
+          ...existingBookingData,
+          paymentHistory,
+          lastPaymentUpdate: new Date().toISOString(),
+        },
+      };
+
+      // If payment status is 'paid' and farm status is 'available', update farm status to 'unavailable'
+      if (paymentStatus === 'paid' && booking.farmStatus === 'available') {
+        updateData.farmStatus = 'unavailable';
+
+        // Also ensure isLoggedIn is set correctly
+        if (booking.userId) {
+          updateData.isLoggedIn = true;
+        }
+      }
+
+      // If payment status is 'cancel', mark farm as available again
+      if (paymentStatus === 'cancel') {
+        updateData.farmStatus = 'available';
+      }
+
+      await booking.update(updateData);
+
+      // Get updated booking with relations
+      const updatedBooking = await this.findById(id);
+
+      return new ApiResponse(false, 'Payment status updated successfully', {
+        ...updatedBooking.data,
+        previousStatus: booking.paymentStatus,
+        newStatus: paymentStatus,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      return new ApiResponse(true, 'Error updating payment status', error.message);
     }
   }
 }

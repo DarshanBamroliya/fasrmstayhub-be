@@ -9,10 +9,17 @@ import { User } from '../users/entities/user.entity';
 import { Booking } from '../booking/entities/booking.entity';
 import { Farmhouse } from '../products/entities/farmhouse.entity';
 import { Location } from '../products/entities/location.entity';
+import { PriceOption } from '../products/entities/price-option.entity';
 import * as bcrypt from 'bcrypt';
 import { ApiResponse } from 'src/common/responses/api-response';
 import { UpdateAdminDto } from './dto/update-admin.dto';
-import { Op } from 'sequelize';
+import { Op, Sequelize } from 'sequelize';
+
+interface MonthlyData {
+  month: string;
+  count: number;
+  income: number;
+}
 
 @Injectable()
 export class AdminService {
@@ -20,6 +27,8 @@ export class AdminService {
     @InjectModel(Admin) private readonly adminModel: typeof Admin,
     @InjectModel(User) private readonly userModel: typeof User,
     @InjectModel(Booking) private readonly bookingModel: typeof Booking,
+    @InjectModel(Farmhouse) private readonly farmhouseModel: typeof Farmhouse,
+    @InjectModel(PriceOption) private readonly priceOptionModel: typeof PriceOption,
     private jwtService: JwtService,
   ) { }
 
@@ -354,4 +363,186 @@ export class AdminService {
     }
   }
 
+  // **Admin Analytics Dashboard API**
+  async getAnalytics() {
+    try {
+      // Get total counts
+      const totalUsers = await this.userModel.count();
+      const totalFarmhouses = await this.farmhouseModel.count();
+      const totalBookings = await this.bookingModel.count({
+        where: { paymentStatus: { [Op.ne]: 'cancel' } },
+      });
+
+      // Get total income
+      const incomeResult: any = await this.bookingModel.findOne({
+        attributes: [[Sequelize.fn('SUM', Sequelize.col('finalPrice')), 'totalIncome']],
+        where: { paymentStatus: 'paid' },
+        raw: true,
+      });
+      const totalIncome = parseFloat(incomeResult?.totalIncome || 0);
+
+      // Get current month date year
+      const now = new Date();
+      const monthNum = now.getMonth() + 1;
+      const yearNum = now.getFullYear();
+      const startYear = monthNum <= 11 ? yearNum - 1 : yearNum;
+      const endYear = monthNum <= 11 ? yearNum : yearNum + 1;
+      const dateYear = `${startYear}-${endYear}`;
+
+      // Get monthly orders and income (all 12 months)
+      const monthlyOrders = await this.getMonthlyOrders();
+      const monthlyIncome = await this.getMonthlyIncome();
+
+      const analytics = {
+        totalUsers,
+        totalFarmhouses,
+        totalBookings,
+        totalIncome,
+        dateYear,
+        monthlyOrders,
+        monthlyIncome,
+      };
+
+      return new ApiResponse(false, 'Analytics fetched successfully', analytics);
+    } catch (error: any) {
+      const errorMessage = error?.message || 'Error fetching analytics';
+      return new ApiResponse(true, errorMessage, null);
+    }
+  }
+
+  private async getMonthlyOrders(): Promise<any[]> {
+    try {
+      // Get all bookings and group by month in application code
+      const bookings = await this.bookingModel.findAll({
+        where: { paymentStatus: { [Op.ne]: 'cancel' } },
+        attributes: ['bookingDate'],
+        raw: true,
+      });
+
+      // Create last 12 months map (from 12 months ago to current month)
+      const monthlyMap = new Map<string, number>();
+      const now = new Date();
+      for (let i = 11; i >= 0; i--) {
+        const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        monthlyMap.set(monthKey, 0);
+      }
+
+      // Count bookings per month
+      bookings.forEach((booking: any) => {
+        const date = new Date(booking.bookingDate);
+        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        if (monthlyMap.has(monthKey)) {
+          monthlyMap.set(monthKey, (monthlyMap.get(monthKey) || 0) + 1);
+        }
+      });
+
+      // Convert to array format
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const resultArray = Array.from(monthlyMap.entries()).map(([monthKey, count]) => {
+        const [year, month] = monthKey.split('-');
+        const monthNum = parseInt(month);
+        const yearNum = parseInt(year);
+        const monthName = monthNames[monthNum - 1];
+        
+        return {
+          month: monthName,
+          count,
+        };
+      });
+
+      // Add dateYear only to the last item
+      if (resultArray.length > 0) {
+        const lastEntry = resultArray[resultArray.length - 1];
+        const lastMonthKey = Array.from(monthlyMap.keys())[monthlyMap.size - 1];
+        const [year, month] = lastMonthKey.split('-');
+        const monthNum = parseInt(month);
+        const yearNum = parseInt(year);
+        const startYear = monthNum <= 11 ? yearNum - 1 : yearNum;
+        const endYear = monthNum <= 11 ? yearNum : yearNum + 1;
+        (lastEntry as any).dateYear = `${startYear}-${endYear}`;
+      }
+
+      return resultArray;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  private async getMonthlyOrdersMySql(): Promise<any[]> {
+    try {
+      // This is now handled in getMonthlyOrders with application-level logic
+      return [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  private async getMonthlyIncome(): Promise<any[]> {
+    try {
+      // Get all paid bookings and group by month in application code
+      const bookings = await this.bookingModel.findAll({
+        where: { paymentStatus: 'paid' },
+        attributes: ['bookingDate', 'finalPrice'],
+        raw: true,
+      });
+
+      // Create last 12 months map (from 12 months ago to current month)
+      const monthlyMap = new Map<string, number>();
+      const now = new Date();
+      for (let i = 11; i >= 0; i--) {
+        const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        monthlyMap.set(monthKey, 0);
+      }
+
+      // Sum income per month
+      bookings.forEach((booking: any) => {
+        const date = new Date(booking.bookingDate);
+        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        if (monthlyMap.has(monthKey)) {
+          monthlyMap.set(monthKey, (monthlyMap.get(monthKey) || 0) + parseFloat(booking.finalPrice || 0));
+        }
+      });
+
+      // Convert to array format
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const resultArray = Array.from(monthlyMap.entries()).map(([monthKey, income]) => {
+        const [year, month] = monthKey.split('-');
+        const monthNum = parseInt(month);
+        const yearNum = parseInt(year);
+        const monthName = monthNames[monthNum - 1];
+        
+        return {
+          month: monthName,
+          income: parseFloat(income.toFixed(2)),
+        };
+      });
+
+      // Add dateYear only to the last item
+      if (resultArray.length > 0) {
+        const lastEntry = resultArray[resultArray.length - 1];
+        const lastMonthKey = Array.from(monthlyMap.keys())[monthlyMap.size - 1];
+        const [year, month] = lastMonthKey.split('-');
+        const monthNum = parseInt(month);
+        const yearNum = parseInt(year);
+        const startYear = monthNum <= 11 ? yearNum - 1 : yearNum;
+        const endYear = monthNum <= 11 ? yearNum : yearNum + 1;
+        (lastEntry as any).dateYear = `${startYear}-${endYear}`;
+      }
+
+      return resultArray;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  private async getMonthlyIncomeMySql(): Promise<any[]> {
+    try {
+      // This is now handled in getMonthlyIncome with application-level logic
+      return [];
+    } catch (error) {
+      return [];
+    }
+  }
 }

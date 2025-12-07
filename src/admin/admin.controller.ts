@@ -116,4 +116,16 @@ export class AdminController {
   async getUserDetails(@Param('id', ParseIntPipe) userId: number): Promise<CustomApiResponse<any>> {
     return this.adminService.getUserDetails(userId);
   }
+
+  // Get Analytics Dashboard (Admin only)
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @Get('analytics')
+  @ApiOperation({ summary: 'Get admin analytics dashboard with KPIs and monthly trends (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Analytics fetched successfully.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async getAnalytics(): Promise<CustomApiResponse<any>> {
+    return this.adminService.getAnalytics();
+  }
 }

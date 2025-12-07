@@ -1,4 +1,4 @@
-import { IsOptional, IsInt, IsEnum, IsDateString } from 'class-validator';
+import { IsOptional, IsInt, IsEnum, IsDateString, IsString } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 
@@ -27,7 +27,7 @@ export class QueryBookingDto {
   @IsInt()
   userId?: number;
 
-  @ApiPropertyOptional({ 
+  @ApiPropertyOptional({
     enum: ['paid', 'partial', 'incomplete', 'cancel'],
     description: 'Filter by payment status'
   })
@@ -44,5 +44,10 @@ export class QueryBookingDto {
   @IsOptional()
   @IsDateString()
   dateTo?: string;
+
+  @ApiPropertyOptional({ description: 'Search by user name, email, or farmhouse name' })
+  @IsOptional()
+  @IsString()
+  search?: string;
 }
 

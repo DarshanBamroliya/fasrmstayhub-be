@@ -21,6 +21,7 @@ import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { Roles } from 'src/common/decorators/user.decorator';
 import { Role } from 'src/common/enums/role.enum';
 import { Public } from 'src/common/decorators/public.decorator';
+import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
 
 @ApiTags('Bookings')
 @Controller('api/bookings')
@@ -69,7 +70,32 @@ export class BookingController {
     return this.bookingService.getAvailableFarms(date ?? '', bookingType);
   }
 
+  // Get most booked farms (top -> bottom)
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @Get('most-booked')
+  @ApiOperation({ summary: 'Get most booked farms (Admin only)' })
+  async getMostBooked(
+    @Query('limit') limit?: number,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ): Promise<CustomApiResponse<any>> {
+    return this.bookingService.getMostBookedFarms({ limit: Number(limit) || 10, dateFrom, dateTo });
+  }
 
+  // Get all farmhouses with booking status/bookingDate (Public)
+  @Public()
+  @Get('farms/status')
+  @ApiOperation({ summary: 'Get all farmhouses with booking status and bookingDate' })
+  @ApiResponse({ status: 200, description: 'Farms with booking status fetched successfully.' })
+  async getFarmsWithStatus(
+    @Query('date') date?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ): Promise<CustomApiResponse<any>> {
+    return this.bookingService.getFarmsWithStatus(date, page ?? 1, limit ?? 0);
+  }
 
   // Get Farm Availability (Public)
   @Public()
@@ -156,5 +182,19 @@ export class BookingController {
   async remove(@Param('id', ParseIntPipe) id: number): Promise<CustomApiResponse<any>> {
     return this.bookingService.remove(id);
   }
-}
 
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @Patch('admin/:id/payment-status')
+  @ApiOperation({ summary: 'Update booking payment status (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Payment status updated successfully.' })
+  @ApiResponse({ status: 404, description: 'Booking not found.' })
+  async updatePaymentStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updatePaymentStatusDto: UpdatePaymentStatusDto,
+  ): Promise<CustomApiResponse<any>> {
+    return this.bookingService.updatePaymentStatus(id, updatePaymentStatusDto);
+  }
+
+}

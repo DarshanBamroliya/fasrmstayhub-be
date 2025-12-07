@@ -5,12 +5,14 @@ import { SequelizeModule } from '@nestjs/sequelize';
 import { Admin } from './entities/admin.entity';
 import { User } from '../users/entities/user.entity';
 import { Booking } from '../booking/entities/booking.entity';
+import { Farmhouse } from '../products/entities/farmhouse.entity';
+import { PriceOption } from '../products/entities/price-option.entity';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 
 @Module({
   imports: [
-    SequelizeModule.forFeature([Admin, User, Booking]),
+    SequelizeModule.forFeature([Admin, User, Booking, Farmhouse, PriceOption]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

@@ -15,6 +15,7 @@ import { QueryFarmhouseDto, SortOrder } from './dto/query-farmhouse.dto';
 import { ApiResponse } from 'src/common/responses/api-response';
 import * as path from 'path';
 import * as fs from 'fs';
+import { EnquiryWhatsappDto } from './dto/enquiry-whatsapp.dto';
 
 @Injectable()
 export class ProductsService {
@@ -84,188 +85,130 @@ export class ProductsService {
         return new ApiResponse(true, 'Farmhouse not found', null);
       }
 
-      await farmhouse.update({ status } as any);
+      await farmhouse.update({ status });
 
       return new ApiResponse(false, 'Farmhouse status updated successfully', {
         id: farmhouse.id,
         status,
       });
+
     } catch (error) {
       return new ApiResponse(true, 'Error updating farmhouse status', error.message);
     }
   }
 
+
   // Get All Farmhouses for Admin - Shows all farms regardless of status
-  async findAllForAdmin(queryDto: QueryFarmhouseDto) {
-    try {
-      const {
-        search,
-        city,
-        priority,
-        bedrooms,
-        minPrice,
-        maxPrice,
-        sort = SortOrder.PRIORITY,
-        page = 1,
-        limit = 10,
-      } = queryDto;
+async findAllForAdmin(queryDto: QueryFarmhouseDto) { 
+  try {
+    const {
+      search,
+      priority,
+      page = 1,
+      limit = 10,
+    } = queryDto;
 
-      const offset = (page - 1) * limit;
+    const offset = (page - 1) * limit;
 
-      // Build where clause (no status filter for admin)
-      const where: any = {};
+    // Main filter
+    const where: any = {};
 
-      if (priority) {
-        where.priority = priority;
-      }
+    if (priority) where.priority = priority;
 
-      if (bedrooms) {
-        where.bedrooms = bedrooms;
-      }
+    // Search in name OR farmNo OR location address
+    if (search) {
+      where[Op.or] = [
+        { name: { [Op.like]: `%${search}%` } },
+        { farmNo: { [Op.like]: `%${search}%` } },
+        { '$location.address$': { [Op.like]: `%${search}%` } },
+      ];
+    }
 
-      // Build location filter
-      const locationWhere: any = {};
-      if (city) {
-        locationWhere.city = city;
-      }
-      if (search) {
-        locationWhere.address = { [Op.like]: `%${search}%` };
-      }
+    // Query DB
+    const { count, rows } = await this.farmhouseModel.findAndCountAll({
+      where,
+      include: [
+        {
+          model: Location,
+          as: 'location',
+          required: search ? true : false, // Only required when searching by address
+        },
+        {
+          model: PriceOption,
+          as: 'priceOptions',
+          required: false,
+        },
+        {
+          model: FarmhouseImage,
+          as: 'images',
+          attributes: ['id', 'imagePath', 'isMain', 'ordering'],
+          separate: true,
+          order: [
+            ['ordering', 'ASC'],
+            ['isMain', 'DESC'],
+          ],
+        },
+      ],
+      order: [['createdAt', 'DESC']], // Default sort by creation date
+      limit,
+      offset,
+      distinct: true,
+      subQuery: false, // Important for search with associations
+    });
 
-      // Build price filter
-      const priceWhere: any = {};
-      if (minPrice !== undefined) {
-        priceWhere.price = { [Op.gte]: minPrice };
-      }
-      if (maxPrice !== undefined) {
-        priceWhere.price = {
-          ...priceWhere.price,
-          [Op.lte]: maxPrice,
-        };
-      }
-
-      // Build order clause
-      let order: any[] = [];
-      switch (sort) {
-        case SortOrder.NEWEST:
-          order = [['createdAt', 'DESC']];
-          break;
-        case SortOrder.PRICE_LOW:
-          order = [
-            [{ model: PriceOption, as: 'priceOptions' }, 'price', 'ASC'],
-            [
-              Sequelize.literal(`CASE priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 END`),
-              'ASC',
-            ],
-          ];
-          break;
-        case SortOrder.PRICE_HIGH:
-          order = [
-            [{ model: PriceOption, as: 'priceOptions' }, 'price', 'DESC'],
-            [
-              Sequelize.literal(`CASE priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 END`),
-              'ASC',
-            ],
-          ];
-          break;
-        case SortOrder.PRIORITY:
-        default:
-          order = [
-            [
-              Sequelize.literal(`CASE priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 END`),
-              'ASC',
-            ],
-            ['createdAt', 'DESC'],
-          ];
-          break;
-      }
-
-      // If search is provided, search in farmhouse name OR location address
-      if (search) {
-        where[Op.or] = [
-          { name: { [Op.like]: `%${search}%` } },
-          { '$location.address$': { [Op.like]: `%${search}%` } },
-        ];
-      }
-
-      const { count, rows } = await this.farmhouseModel.findAndCountAll({
-        where,
-        include: [
-          {
-            model: Location,
-            as: 'location',
-            where: Object.keys(locationWhere).length > 0 && !search ? locationWhere : undefined,
-            required: false,
-          },
-          {
-            model: PriceOption,
-            as: 'priceOptions',
-            where: Object.keys(priceWhere).length > 0 ? priceWhere : undefined,
-            required: false,
-          },
-          {
-            model: FarmhouseImage,
-            as: 'images',
-            attributes: ['id', 'imagePath', 'isMain', 'ordering'],
-            separate: true,
-            order: [['ordering', 'ASC'], ['isMain', 'DESC']],
-          },
-        ],
-        order,
-        limit,
-        offset,
-        distinct: true,
-      });
-
-      // Transform data to return all fields including status
-      const farmhouses = rows.map((farmhouse: any) => {
-        const farmhouseData = farmhouse.toJSON();
-        return {
-          id: farmhouseData.id,
-          name: farmhouseData.name,
-          slug: farmhouseData.slug,
-          maxPersons: farmhouseData.maxPersons,
-          bedrooms: farmhouseData.bedrooms,
-          isRecomanded: farmhouseData.isRecomanded,
-          isAmazing: farmhouseData.isAmazing,
-          status: farmhouseData.status,
-          farmNo: farmhouseData.farmNo,
-          images: farmhouseData.images?.map((img: any) => ({
+    // Format Response
+    const farmhouses = rows.map((farmhouse: any) => {
+      const data = farmhouse.toJSON();
+      return {
+        id: data.id,
+        name: data.name,
+        slug: data.slug,
+        maxPersons: data.maxPersons,
+        priority: data.priority,
+        bedrooms: data.bedrooms,
+        isRecomanded: data.isRecomanded,
+        isAmazing: data.isAmazing,
+        status: data.status,
+        farmNo: data.farmNo,
+        images:
+          data.images?.map((img: any) => ({
             id: img.id,
-            imagePath: `/uploads/farm-product/${img.imagePath}`,
+            imagePath: `uploads/farm-product/${img.imagePath}`,
             isMain: img.isMain,
             ordering: img.ordering,
           })) || [],
-          location: farmhouseData.location
-            ? {
-              id: farmhouseData.location.id,
-              address: farmhouseData.location.address,
-              city: farmhouseData.location.city,
-              state: farmhouseData.location.state,
-              latitude: farmhouseData.location.latitude,
-              longitude: farmhouseData.location.longitude,
-            }
-            : null,
-          rent: farmhouseData.priceOptions?.map((price: any) => ({
-            id: price.id,
-            category: price.category,
-            price: price.price,
-            maxPeople: price.maxPeople,
+        location: data.location
+          ? {
+            id: data.location.id,
+            address: data.location.address,
+            city: data.location.city,
+            state: data.location.state,
+            latitude: data.location.latitude,
+            longitude: data.location.longitude,
+          }
+          : null,
+        rent:
+          data.priceOptions?.map((p: any) => ({
+            id: p.id,
+            category: p.category,
+            price: p.price,
+            maxPeople: p.maxPeople,
           })) || [],
-        };
-      });
+      };
+    });
 
-      return new ApiResponse(false, 'Farmhouses fetched successfully', {
-        farmhouses,
-        total: count,
-        page,
-        limit,
-        totalPages: Math.ceil(count / limit),
-      });
-    } catch (error) {
-      return new ApiResponse(true, 'Error fetching farmhouses', error.message);
-    }
+    return new ApiResponse(false, 'Farmhouses fetched successfully', {
+      farmhouses,
+      total: count,
+      page,
+      limit,
+      totalPages: Math.ceil(count / limit),
+    });
+  } catch (error) {
+    return new ApiResponse(true, 'Error fetching farmhouses', error.message);
   }
+}
+
 
   // Get All Farmhouses (Public) - Only images, locations, rent, maxPersons, bedrooms, isRecomanded, isAmazing
   async findAll(queryDto: QueryFarmhouseDto) {
@@ -277,84 +220,36 @@ export class ProductsService {
         bedrooms,
         minPrice,
         maxPrice,
-        sort = SortOrder.PRIORITY,
+        sort = SortOrder.ASC, // default asc
         page = 1,
         limit = 10,
       } = queryDto;
 
       const offset = (page - 1) * limit;
 
-      // Build where clause
-      const where: any = {
-        status: true, // Only show farms with status = true
-      };
+      // WHERE CLAUSE
+      const where: any = { status: true };
 
-      if (priority) {
-        where.priority = priority;
-      }
+      if (priority) where.priority = priority;
+      if (bedrooms) where.bedrooms = bedrooms;
 
-      if (bedrooms) {
-        where.bedrooms = bedrooms;
-      }
-
-      // Build location filter
+      // LOCATION FILTER
       const locationWhere: any = {};
-      if (city) {
-        locationWhere.city = city;
-      }
+      if (city) locationWhere.city = city;
       if (search) {
         locationWhere.address = { [Op.like]: `%${search}%` };
       }
 
-      // Build price filter
+      // PRICE FILTER
       const priceWhere: any = {};
-      if (minPrice !== undefined) {
-        priceWhere.price = { [Op.gte]: minPrice };
-      }
-      if (maxPrice !== undefined) {
-        priceWhere.price = {
-          ...priceWhere.price,
-          [Op.lte]: maxPrice,
-        };
-      }
+      if (minPrice !== undefined) priceWhere.price = { [Op.gte]: minPrice };
+      if (maxPrice !== undefined)
+        priceWhere.price = { ...(priceWhere.price || {}), [Op.lte]: maxPrice };
 
-      // Build order clause
+      // ✅ ASC / DESC Logic Only
       let order: any[] = [];
-      switch (sort) {
-        case SortOrder.NEWEST:
-          order = [['createdAt', 'DESC']];
-          break;
-        case SortOrder.PRICE_LOW:
-          order = [
-            [{ model: PriceOption, as: 'priceOptions' }, 'price', 'ASC'],
-            [
-              Sequelize.literal(`CASE priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 END`),
-              'ASC',
-            ],
-          ];
-          break;
-        case SortOrder.PRICE_HIGH:
-          order = [
-            [{ model: PriceOption, as: 'priceOptions' }, 'price', 'DESC'],
-            [
-              Sequelize.literal(`CASE priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 END`),
-              'ASC',
-            ],
-          ];
-          break;
-        case SortOrder.PRIORITY:
-        default:
-          order = [
-            [
-              Sequelize.literal(`CASE priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 END`),
-              'ASC',
-            ],
-            ['createdAt', 'DESC'],
-          ];
-          break;
-      }
 
-      // If search is provided, search in farmhouse name OR location address
+      // SEARCH: name OR location.address
       if (search) {
         where[Op.or] = [
           { name: { [Op.like]: `%${search}%` } },
@@ -362,6 +257,7 @@ export class ProductsService {
         ];
       }
 
+      // QUERY
       const { count, rows } = await this.farmhouseModel.findAndCountAll({
         where,
         include: [
@@ -391,39 +287,39 @@ export class ProductsService {
         distinct: true,
       });
 
-      // Transform data to return only required fields
+      // RESPONSE TRANSFORM
       const farmhouses = rows.map((farmhouse: any) => {
-        const farmhouseData = farmhouse.toJSON();
+        const f = farmhouse.toJSON();
         return {
-          id: farmhouseData.id,
-          name: farmhouseData.name,
-          slug: farmhouseData.slug,
-          maxPersons: farmhouseData.maxPersons,
-          bedrooms: farmhouseData.bedrooms,
-          isRecomanded: farmhouseData.isRecomanded,
-          isAmazing: farmhouseData.isAmazing,
-          farmNo: farmhouseData.farmNo,
-          images: farmhouseData.images?.map((img: any) => ({
+          id: f.id,
+          name: f.name,
+          slug: f.slug,
+          maxPersons: f.maxPersons,
+          bedrooms: f.bedrooms,
+          isRecomanded: f.isRecomanded,
+          isAmazing: f.isAmazing,
+          farmNo: f.farmNo,
+          images: f.images?.map((img: any) => ({
             id: img.id,
-            imagePath: `/uploads/farm-product/${img.imagePath}`,
+            imagePath: `uploads/farm-product/${img.imagePath}`,
             isMain: img.isMain,
             ordering: img.ordering,
           })) || [],
-          location: farmhouseData.location
+          location: f.location
             ? {
-              id: farmhouseData.location.id,
-              address: farmhouseData.location.address,
-              city: farmhouseData.location.city,
-              state: farmhouseData.location.state,
-              latitude: farmhouseData.location.latitude,
-              longitude: farmhouseData.location.longitude,
+              id: f.location.id,
+              address: f.location.address,
+              city: f.location.city,
+              state: f.location.state,
+              latitude: f.location.latitude,
+              longitude: f.location.longitude,
             }
             : null,
-          rent: farmhouseData.priceOptions?.map((price: any) => ({
-            id: price.id,
-            category: price.category,
-            price: price.price,
-            maxPeople: price.maxPeople,
+          rent: f.priceOptions?.map((p: any) => ({
+            id: p.id,
+            category: p.category,
+            price: p.price,
+            maxPeople: p.maxPeople,
           })) || [],
         };
       });
@@ -439,6 +335,7 @@ export class ProductsService {
       return new ApiResponse(true, 'Error fetching farmhouses', error.message);
     }
   }
+
 
   // Get Farmhouse by ID (Public)
   async findById(id: number) {
@@ -492,7 +389,7 @@ export class ProductsService {
       if (farmhouseData.images) {
         farmhouseData.images = farmhouseData.images.map((img: any) => ({
           ...img,
-          imagePath: `/uploads/farm-product/${img.imagePath}`,
+          imagePath: `uploads/farm-product/${img.imagePath}`,
         }));
       }
 
@@ -505,51 +402,44 @@ export class ProductsService {
   // Update Farmhouse (Admin only)
   async update(id: number, updateFarmhouseDto: UpdateFarmhouseDto) {
     try {
+      // 1️⃣ Find existing farmhouse
       const farmhouse = await this.farmhouseModel.findByPk(id);
-
       if (!farmhouse) {
         return new ApiResponse(true, 'Farmhouse not found', null);
       }
 
+      // 2️⃣ Separate related entities from main farmhouse fields
       const { location, priceOptions, ...farmhouseData } = updateFarmhouseDto;
 
-      // Update farmhouse
+      // 3️⃣ Update main farmhouse fields if provided
       if (Object.keys(farmhouseData).length > 0) {
         await farmhouse.update(farmhouseData as any);
       }
 
-      // Update location if provided
+      // 4️⃣ Update location if provided
       if (location) {
-        const existingLocation = await this.locationModel.findOne({
-          where: { farmhouseId: id },
-        });
-
+        const existingLocation = await this.locationModel.findOne({ where: { farmhouseId: id } });
         if (existingLocation) {
           await existingLocation.update(location as any);
         } else {
-          await this.locationModel.create({
-            ...location,
-            farmhouseId: id,
-          } as any);
+          await this.locationModel.create({ ...location, farmhouseId: id } as any);
         }
       }
 
-      // Update price options if provided
-      if (priceOptions && priceOptions.length > 0) {
-        // Delete existing price options
+      // 5️⃣ Update price options if provided
+      if (priceOptions) {
+        // Delete all existing price options
         await this.priceOptionModel.destroy({ where: { farmhouseId: id } });
-        // Create new ones
-        await this.priceOptionModel.bulkCreate(
-          priceOptions.map((option) => ({
-            ...option,
-            farmhouseId: id,
-          })) as any,
-        );
+
+        // Add new ones if array is not empty
+        if (priceOptions.length > 0) {
+          await this.priceOptionModel.bulkCreate(
+            priceOptions.map(option => ({ ...option, farmhouseId: id })) as any
+          );
+        }
       }
 
-      // House rules removed from update API
-
-      // Fetch updated farmhouse
+      // 6️⃣ Fetch the updated farmhouse
       const updatedFarmhouse = await this.findById(id);
 
       return new ApiResponse(false, 'Farmhouse updated successfully', updatedFarmhouse.data);
@@ -557,6 +447,7 @@ export class ProductsService {
       return new ApiResponse(true, 'Error updating farmhouse', error.message);
     }
   }
+
 
   // Delete Farmhouse (Admin only)
   async remove(id: number) {
@@ -627,33 +518,33 @@ export class ProductsService {
         fs.mkdirSync(uploadDir, { recursive: true });
       }
 
-      const uploadedFiles: Array<{
+      // ✅ FIX 1 — add type so array is not NEVER[]
+      const uploadedFiles: {
         id: number;
         farmhouseId: number;
         filePath: string;
         isMain: boolean;
         ordering: number;
         type: 'image' | 'video';
-      }> = [];
+      }[] = [];
 
       for (const file of files) {
         const timestamp = Date.now();
-        const filename = `${timestamp}-${file.originalname}`;
+        const ext = path.extname(file.originalname).toLowerCase();
+
+        const filename = `${timestamp}${ext}`;
         const filePath = path.join(uploadDir, filename);
 
-        // Save file to disk
         fs.writeFileSync(filePath, file.buffer);
 
-        // Determine file type
-        const isVideo = file.mimetype.match(/\/(mp4|mov|avi|wmv|flv|webm|mkv)$/);
+        const isVideo = file.mimetype.startsWith("video/");
         const fileType: 'image' | 'video' = isVideo ? 'video' : 'image';
 
-        // Get max ordering for this farmhouse
         const maxOrdering = (await this.farmhouseImageModel.max('ordering', {
           where: { farmhouseId },
         })) as number | null;
 
-        // Save record to DB
+        // ✅ FIX 2 — cast object as ANY (only place needed)
         const image = await this.farmhouseImageModel.create({
           farmhouseId,
           imagePath: filename,
@@ -661,11 +552,10 @@ export class ProductsService {
           ordering: (maxOrdering ?? 0) + 1,
         } as any);
 
-        // Push to response array
         uploadedFiles.push({
           id: image.id,
           farmhouseId,
-          filePath: `/uploads/farm-product/${filename}`,
+          filePath: `uploads/farm-product/${filename}`,
           isMain: image.isMain,
           ordering: image.ordering,
           type: fileType,
@@ -676,10 +566,13 @@ export class ProductsService {
         farmhouseId,
         files: uploadedFiles,
       });
+
     } catch (error) {
       return new ApiResponse(true, 'Error uploading files', error.message);
     }
   }
+
+
 
   async addAmenities(
     farmhouseId: number,
@@ -777,6 +670,106 @@ export class ProductsService {
     }
   }
 
+  async upsertAmenities(
+    farmhouseId: number,
+    amenities: Array<{ name: string; quantity: number; category?: string }>
+  ) {
+    try {
+      const farmhouse = await this.farmhouseModel.findByPk(farmhouseId);
+      if (!farmhouse) {
+        return new ApiResponse(true, 'Farmhouse not found', null);
+      }
+
+      const results: any[] = [];
+
+      for (const item of amenities) {
+        try {
+          const amenityName = item.name.trim();
+          const categoryName = item.category?.trim() || 'Common';
+
+          let amenity = await this.amenityModel.findOne({ where: { name: amenityName } });
+          if (!amenity) {
+            amenity = await this.amenityModel.create({ name: amenityName } as any);
+          }
+
+          let category = await this.amenityCategoryModel.findOne({ where: { name: categoryName } });
+          if (!category) {
+            category = await this.amenityCategoryModel.create({ name: categoryName } as any);
+          }
+
+          const existing = await this.farmhouseAmenityModel.findOne({
+            where: { farmhouseId, amenityId: amenity.id },
+          });
+
+          // DELETE (quantity = 0)
+          if (item.quantity === 0) {
+            if (existing) {
+              await existing.destroy();
+              results.push({
+                farmhouseId,
+                amenity: amenityName,
+                category: categoryName,
+                previousQuantity: existing.quantity,
+                status: 'removed',
+              });
+            }
+            continue;
+          }
+
+          // UPDATE
+          if (existing) {
+            const oldQuantity = existing.quantity;
+            await existing.update({ quantity: item.quantity, categoryId: category.id });
+
+            results.push({
+              farmhouseId,
+              amenity: amenityName,
+              category: categoryName,
+              previousQuantity: oldQuantity,
+              quantity: item.quantity,
+              status: oldQuantity === item.quantity ? 'no-change' : 'updated',
+            });
+          }
+          // CREATE
+          else {
+            await this.farmhouseAmenityModel.create({
+              farmhouseId,
+              amenityId: amenity.id,
+              categoryId: category.id,
+              quantity: item.quantity,
+            } as any);
+
+            results.push({
+              farmhouseId,
+              amenity: amenityName,
+              category: categoryName,
+              quantity: item.quantity,
+              status: 'added',
+            });
+          }
+
+        } catch (err) {
+          results.push({
+            farmhouseId,
+            amenity: item.name,
+            category: item.category || 'Common',
+            quantity: item.quantity,
+            status: 'error',
+            message: err.message,
+          });
+        }
+      }
+
+      return new ApiResponse(false, 'Amenities processed', {
+        farmhouseId,
+        updates: results
+      });
+
+    } catch (err) {
+      return new ApiResponse(true, 'Internal Error', err.message);
+    }
+  }
+
 
 
   async deleteImage(farmhouseId: number, imageId: number) {
@@ -827,6 +820,38 @@ export class ProductsService {
 
     } catch (error) {
       return new ApiResponse(true, 'Error deleting amenity', error.message);
+    }
+  }
+
+  // Build WhatsApp link for enquiry using farmhouse contact or provided phone
+  async getWhatsappEnquiryLink(dto: EnquiryWhatsappDto) {
+    try {
+      const { farmhouseId, phone, message } = dto;
+
+      let targetPhone = phone?.trim();
+
+      if (!targetPhone && farmhouseId) {
+        const farmhouse = await this.farmhouseModel.findByPk(farmhouseId, { attributes: ['id', 'name', 'farmNo', 'contactNumber', 'mobileNo'] });
+        if (!farmhouse) return new ApiResponse(true, 'Farmhouse not found', null);
+        const f: any = farmhouse.toJSON();
+        targetPhone = f.contactNumber || f.mobileNo || null;
+      }
+
+      if (!targetPhone) {
+        return new ApiResponse(true, 'No phone available for this farmhouse. Provide phone in request.', null);
+      }
+
+      // sanitize phone: remove non-digit and plus
+      let digits = targetPhone.replace(/[^\d+]/g, '');
+      if (digits.startsWith('+')) digits = digits.slice(1);
+      digits = digits.replace(/\D/g, '');
+
+      const encoded = encodeURIComponent(message || '');
+      const waUrl = `https://wa.me/${digits}?text=${encoded}`;
+
+      return new ApiResponse(false, 'WhatsApp link generated', { url: waUrl, phone: digits });
+    } catch (err: any) {
+      return new ApiResponse(true, 'Error generating WhatsApp link', err.message);
     }
   }
 

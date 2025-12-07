@@ -1,12 +1,10 @@
-import { IsOptional, IsString, IsEnum, IsInt, Min, IsBoolean } from 'class-validator';
+import { IsOptional, IsString, IsEnum, IsInt, Min } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 
 export enum SortOrder {
-  NEWEST = 'newest',
-  PRICE_LOW = 'price_low',
-  PRICE_HIGH = 'price_high',
-  PRIORITY = 'priority',
+  ASC = 'asc',
+  DESC = 'desc',
 }
 
 export class QueryFarmhouseDto {
@@ -20,7 +18,10 @@ export class QueryFarmhouseDto {
   @IsString()
   city?: string;
 
-  @ApiPropertyOptional({ description: 'Filter by priority', enum: ['HIGH', 'MEDIUM', 'LOW'] })
+  @ApiPropertyOptional({ 
+    description: 'Filter by priority', 
+    enum: ['HIGH', 'MEDIUM', 'LOW'] 
+  })
   @IsOptional()
   @IsEnum(['HIGH', 'MEDIUM', 'LOW'])
   priority?: 'HIGH' | 'MEDIUM' | 'LOW';
@@ -46,7 +47,12 @@ export class QueryFarmhouseDto {
   @Min(0)
   maxPrice?: number;
 
-  @ApiPropertyOptional({ description: 'Sort order', enum: SortOrder, default: SortOrder.PRIORITY })
+  @ApiPropertyOptional({
+    description: 'Sort order (asc | desc only)',
+    enum: SortOrder,
+    example: SortOrder.DESC,
+    default: SortOrder.DESC,
+  })
   @IsOptional()
   @IsEnum(SortOrder)
   sort?: SortOrder;
@@ -65,4 +71,3 @@ export class QueryFarmhouseDto {
   @Min(1)
   limit?: number;
 }
-

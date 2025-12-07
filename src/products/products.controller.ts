@@ -11,6 +11,7 @@ import {
   UseInterceptors,
   UploadedFiles,
   ParseIntPipe,
+  Put,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
@@ -19,12 +20,14 @@ import { CreateFarmhouseDto } from './dto/create-farmhouse.dto';
 import { UpdateFarmhouseDto } from './dto/update-farmhouse.dto';
 import { QueryFarmhouseDto } from './dto/query-farmhouse.dto';
 import { AddAmenityDto } from './dto/add-amenity.dto';
+import { EnquiryWhatsappDto } from './dto/enquiry-whatsapp.dto';
 import { ApiResponse as CustomApiResponse } from 'src/common/responses/api-response';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { Roles } from 'src/common/decorators/user.decorator';
 import { Role } from 'src/common/enums/role.enum';
 import { Public } from 'src/common/decorators/public.decorator';
 import { memoryStorage } from 'multer';
+import { UpdateFarmhouseStatusDto } from './dto/update-status.dto';
 
 interface MulterFile {
   fieldname: string;
@@ -80,6 +83,15 @@ export class ProductsController {
     return this.productsService.findAll(queryDto);
   }
 
+  // Enquiry Now -> returns WhatsApp link to open (frontend should window.open(url))
+  @Public()
+  @Post('enquiry-whatsapp')
+  @ApiOperation({ summary: 'Generate WhatsApp enquiry link for a farmhouse' })
+  @ApiResponse({ status: 200, description: 'WhatsApp link generated' })
+  async enquiryWhatsapp(@Body() dto: EnquiryWhatsappDto): Promise<CustomApiResponse<any>> {
+    return this.productsService.getWhatsappEnquiryLink(dto);
+  }
+
   // Get All Farmhouses for Admin - Shows all farms regardless of status
   @UseGuards(JwtAuthGuard)
   @Roles(Role.ADMIN)
@@ -97,14 +109,14 @@ export class ProductsController {
   @ApiBearerAuth()
   @Patch(':id/status')
   @ApiOperation({ summary: 'Update farmhouse status (Admin only)' })
-  @ApiResponse({ status: 200, description: 'Farmhouse status updated successfully.' })
-  @ApiResponse({ status: 404, description: 'Farmhouse not found.' })
   async updateStatus(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { status: boolean },
+    @Body() body: UpdateFarmhouseStatusDto,
   ): Promise<CustomApiResponse<any>> {
+
     return this.productsService.updateStatus(id, body.status);
   }
+
 
   // Get Farmhouse by ID (Public)
   @Public()
@@ -192,6 +204,22 @@ export class ProductsController {
   ): Promise<CustomApiResponse<any>> {
     return this.productsService.addAmenities(id, amenities);
   }
+
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @Put(':id/amenities')
+  @ApiOperation({ summary: 'Update amenities of farmhouse (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Amenities updated successfully.' })
+  @ApiResponse({ status: 404, description: 'Farmhouse not found.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async updateAmenities(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() amenities: AddAmenityDto[],
+  ): Promise<CustomApiResponse<any>> {
+    return this.productsService.upsertAmenities(id, amenities);
+  }
+
 
   @UseGuards(JwtAuthGuard)
   @Roles(Role.ADMIN)
