@@ -99,115 +99,131 @@ export class ProductsService {
 
 
   // Get All Farmhouses for Admin - Shows all farms regardless of status
-async findAllForAdmin(queryDto: QueryFarmhouseDto) { 
-  try {
-    const {
-      search,
-      priority,
-      page = 1,
-      limit = 10,
-    } = queryDto;
+  async findAllForAdmin(queryDto: QueryFarmhouseDto) {
+    try {
+      const {
+        search,
+        priority,
+        page = 1,
+        limit = 10,
+      } = queryDto;
 
-    const offset = (page - 1) * limit;
+      const offset = (page - 1) * limit;
 
-    // Main filter
-    const where: any = {};
+      // Main filter
+      const where: any = {};
 
-    if (priority) where.priority = priority;
+      if (priority) where.priority = priority;
 
-    // Search in name OR farmNo OR location address
-    if (search) {
-      where[Op.or] = [
-        { name: { [Op.like]: `%${search}%` } },
-        { farmNo: { [Op.like]: `%${search}%` } },
-        { '$location.address$': { [Op.like]: `%${search}%` } },
-      ];
-    }
+      // For search query - create separate where condition for location
+      let locationWhere = {};
+      if (search) {
+        where[Op.or] = [
+          { name: { [Op.like]: `%${search}%` } },
+          { farmNo: { [Op.like]: `%${search}%` } },
+        ];
 
-    // Query DB
-    const { count, rows } = await this.farmhouseModel.findAndCountAll({
-      where,
-      include: [
-        {
+        // Location search will be handled separately in include
+        locationWhere = {
+          address: { [Op.like]: `%${search}%` }
+        };
+      }
+
+      // Get total count without includes (more accurate)
+      const totalCount = await this.farmhouseModel.count({
+        where,
+        include: search ? [{
           model: Location,
           as: 'location',
-          required: search ? true : false, // Only required when searching by address
-        },
-        {
-          model: PriceOption,
-          as: 'priceOptions',
-          required: false,
-        },
-        {
-          model: FarmhouseImage,
-          as: 'images',
-          attributes: ['id', 'imagePath', 'isMain', 'ordering'],
-          separate: true,
-          order: [
-            ['ordering', 'ASC'],
-            ['isMain', 'DESC'],
-          ],
-        },
-      ],
-      order: [['createdAt', 'DESC']], // Default sort by creation date
-      limit,
-      offset,
-      distinct: true,
-      subQuery: false, // Important for search with associations
-    });
+          where: locationWhere,
+          required: true
+        }] : [],
+        distinct: true
+      });
 
-    // Format Response
-    const farmhouses = rows.map((farmhouse: any) => {
-      const data = farmhouse.toJSON();
-      return {
-        id: data.id,
-        name: data.name,
-        slug: data.slug,
-        maxPersons: data.maxPersons,
-        priority: data.priority,
-        bedrooms: data.bedrooms,
-        isRecomanded: data.isRecomanded,
-        isAmazing: data.isAmazing,
-        status: data.status,
-        farmNo: data.farmNo,
-        images:
-          data.images?.map((img: any) => ({
+      // Query DB with includes for full data
+      const farmhouses = await this.farmhouseModel.findAll({
+        where,
+        include: [
+          {
+            model: Location,
+            as: 'location',
+            where: search ? locationWhere : {},
+            required: search ? true : false,
+          },
+          {
+            model: PriceOption,
+            as: 'priceOptions',
+            required: false,
+          },
+          {
+            model: FarmhouseImage,
+            as: 'images',
+            attributes: ['id', 'imagePath', 'isMain', 'ordering'],
+            separate: true, // This loads images separately, avoiding duplication
+            order: [
+              ['ordering', 'ASC'],
+              ['isMain', 'DESC'],
+            ],
+          },
+        ],
+        order: [['createdAt', 'DESC']],
+        limit,
+        offset,
+        subQuery: false,
+      });
+
+      // Format Response
+      const formattedFarmhouses = farmhouses.map((farmhouse: any) => {
+        const data = farmhouse.toJSON();
+        return {
+          id: data.id,
+          name: data.name,
+          slug: data.slug,
+          maxPersons: data.maxPersons,
+          priority: data.priority,
+          bedrooms: data.bedrooms,
+          isRecomanded: data.isRecomanded,
+          isAmazing: data.isAmazing,
+          status: data.status,
+          farmNo: data.farmNo,
+          images: data.images?.map((img: any) => ({
             id: img.id,
-            imagePath: `uploads/farm-product/${img.imagePath}`,
+            imagePath: `${img.imagePath}`, // Fixed: removed extra concatenation
             isMain: img.isMain,
             ordering: img.ordering,
           })) || [],
-        location: data.location
-          ? {
-            id: data.location.id,
-            address: data.location.address,
-            city: data.location.city,
-            state: data.location.state,
-            latitude: data.location.latitude,
-            longitude: data.location.longitude,
-          }
-          : null,
-        rent:
-          data.priceOptions?.map((p: any) => ({
+          location: data.location
+            ? {
+              id: data.location.id,
+              address: data.location.address,
+              city: data.location.city,
+              state: data.location.state,
+              latitude: data.location.latitude,
+              longitude: data.location.longitude,
+            }
+            : null,
+          rent: data.priceOptions?.map((p: any) => ({
             id: p.id,
             category: p.category,
             price: p.price,
             maxPeople: p.maxPeople,
           })) || [],
-      };
-    });
+        };
+      });
 
-    return new ApiResponse(false, 'Farmhouses fetched successfully', {
-      farmhouses,
-      total: count,
-      page,
-      limit,
-      totalPages: Math.ceil(count / limit),
-    });
-  } catch (error) {
-    return new ApiResponse(true, 'Error fetching farmhouses', error.message);
+      return new ApiResponse(false, 'Farmhouses fetched successfully', {
+        farmhouses: formattedFarmhouses,
+        total: totalCount,
+        page,
+        limit,
+        totalPages: Math.ceil(totalCount / limit),
+      });
+    } catch (error) {
+      console.error('Error fetching farmhouses:', error);
+      return new ApiResponse(true, 'Error fetching farmhouses', error.message);
+    }
   }
-}
 
 
   // Get All Farmhouses (Public) - Only images, locations, rent, maxPersons, bedrooms, isRecomanded, isAmazing

@@ -183,12 +183,14 @@ export class BookingController {
     return this.bookingService.remove(id);
   }
 
+  // Update the controller method to use new DTOexport const updateBooking = createAsyncThunk(
   @UseGuards(JwtAuthGuard)
   @Roles(Role.ADMIN)
   @ApiBearerAuth()
   @Patch('admin/:id/payment-status')
   @ApiOperation({ summary: 'Update booking payment status (Admin only)' })
   @ApiResponse({ status: 200, description: 'Payment status updated successfully.' })
+  @ApiResponse({ status: 400, description: 'Invalid payment data.' })
   @ApiResponse({ status: 404, description: 'Booking not found.' })
   async updatePaymentStatus(
     @Param('id', ParseIntPipe) id: number,

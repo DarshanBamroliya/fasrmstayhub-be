@@ -8,12 +8,13 @@ import { PriceOption } from '../products/entities/price-option.entity';
 import { Location } from '../products/entities/location.entity';
 import { FarmhouseImage } from '../products/entities/farmhouse-image.entity';
 import { User } from '../users/entities/user.entity';
+import { BookingCronService } from 'src/common/cron/booking-cron.service';
 
 @Module({
   imports: [SequelizeModule.forFeature([Booking, Farmhouse, PriceOption, Location, FarmhouseImage, User])],
   controllers: [BookingController],
-  providers: [BookingService],
-  exports: [BookingService],
+  providers: [BookingService, BookingCronService],
+  exports: [BookingService, BookingCronService],
 })
 export class BookingModule {}
 

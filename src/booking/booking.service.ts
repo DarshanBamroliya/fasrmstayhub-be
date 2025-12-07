@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Inject } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Op, Sequelize } from 'sequelize';
 import { Booking } from './entities/booking.entity';
@@ -12,6 +12,15 @@ import { UpdateBookingDto } from './dto/update-booking.dto';
 import { QueryBookingDto } from './dto/query-booking.dto';
 import { ApiResponse } from 'src/common/responses/api-response';
 import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
+import { BookingCronService } from 'src/common/cron/booking-cron.service';
+
+interface PartialPaymentResponse {
+  paidAmount: number;
+  remainingAmount: number;
+  totalAmount: number;
+  notes?: string;
+  updatedAt?: string;
+}
 
 @Injectable()
 export class BookingService {
@@ -20,7 +29,11 @@ export class BookingService {
     @InjectModel(Farmhouse) private readonly farmhouseModel: typeof Farmhouse,
     @InjectModel(PriceOption) private readonly priceOptionModel: typeof PriceOption,
     @InjectModel(User) private readonly userModel: typeof User,
+    @Inject(BookingCronService)
+    private readonly bookingCronService: BookingCronService, // ✅ Add cron service
   ) { }
+
+  // =================== PRIVATE HELPER METHODS ===================
 
   // Calculate discount based on price
   private calculateDiscount(price: number, isLoggedIn: boolean): number {
@@ -96,44 +109,36 @@ export class BookingService {
     return 12; // Default
   }
 
-  // === Booking time helpers required by requirements ===
+  // === Booking time helpers ===
   private calculateCheckIn(selectedDate: string | Date): Date {
     const d = typeof selectedDate === 'string' ? new Date(selectedDate) : new Date(selectedDate as Date);
-    d.setHours(9, 0, 0, 0); // 09:00 AM
+    d.setHours(9, 0, 0, 0);
     return d;
   }
 
   private calculateCheckOut(checkIn: Date, bookingType: string): Date {
     const out = new Date(checkIn);
     if (bookingType.includes('24HR')) {
-      out.setDate(out.getDate() + 1); // next day at same 09:00
+      out.setDate(out.getDate() + 1);
       out.setHours(9, 0, 0, 0);
     } else {
-      // 12HR booking: same day 21:00
       out.setHours(21, 0, 0, 0);
     }
     return out;
   }
 
   private calculateNextAvailableDate(checkOut: Date, bookingType: string): Date {
-    // For 12HR: available starting next day
-    // For 24HR: available starting day after checkout
     const next = new Date(checkOut);
-    // move to date-only first
     next.setHours(0, 0, 0, 0);
     if (bookingType.includes('24HR')) {
-      // checkout is next day 09:00; available starting day after checkout
       next.setDate(next.getDate() + 2);
     } else {
-      // 12HR: available starting next day
       next.setDate(next.getDate() + 1);
     }
     return next;
   }
 
-  // derive checkIn/checkOut from an existing booking record
   private deriveCheckInFromRecord(booking: any): Date {
-    // booking.bookingDate may include time; if not, use booking.bookingTimeFrom or default 09:00
     const bd = booking.bookingDate ? new Date(booking.bookingDate) : null;
     const base = bd ? new Date(bd) : new Date();
     if (booking.bookingTimeFrom) {
@@ -152,7 +157,6 @@ export class BookingService {
         const [h, m] = (booking.bookingTimeTo || '09:00').split(':').map(Number);
         ed.setHours(h, m, 0, 0);
       } else {
-        // if end date exists but no time, infer based on type
         if (booking.bookingType && booking.bookingType.includes('24HR')) {
           ed.setHours(9, 0, 0, 0);
         } else {
@@ -162,7 +166,6 @@ export class BookingService {
       return ed;
     }
 
-    // fallback: calculate from start and type
     const ci = this.deriveCheckInFromRecord(booking);
     return this.calculateCheckOut(ci, booking.bookingType || 'REGULAR_12HR');
   }
@@ -170,24 +173,9 @@ export class BookingService {
   private isOverlapping(existing: any, newCheckIn: Date, newCheckOut: Date): boolean {
     const exCI = this.deriveCheckInFromRecord(existing);
     const exCO = this.deriveCheckOutFromRecord(existing);
-
-    // overlap if newCI < exCO AND newCO > exCI
     return newCheckIn < exCO && newCheckOut > exCI;
   }
 
-  private getFarmhouseStatusForBooking(now: Date, booking: any): 'Available' | 'Booked' {
-    const ci = this.deriveCheckInFromRecord(booking);
-    const co = this.deriveCheckOutFromRecord(booking);
-    const nextAvailable = this.calculateNextAvailableDate(co, booking.bookingType || 'REGULAR_12HR');
-
-    if (now < ci) return 'Available';
-    if (now >= nextAvailable) return 'Available';
-    if (now >= ci && now < co) return 'Booked';
-    // fallback
-    return 'Available';
-  }
-
-  // Calculate available dates based on booking (not stored in DB)
   private calculateAvailableDates(
     startDate: Date,
     endDate: Date,
@@ -203,28 +191,21 @@ export class BookingService {
 
     const is24Hour = bookingType.includes('24HR');
 
-    // Start date is always booked
     bookedDates.push(start.toISOString().split('T')[0]);
 
     if (is24Hour) {
-      // For 24HR bookings: end date (checkout day) is available
       if (end.getTime() !== start.getTime()) {
         availableDates.push(end.toISOString().split('T')[0]);
       }
     } else {
-      // For 12HR bookings: next day after start date is available
       const nextDay = new Date(start);
       nextDay.setDate(nextDay.getDate() + 1);
       availableDates.push(nextDay.toISOString().split('T')[0]);
     }
 
-    return {
-      bookedDates,
-      availableDates,
-    };
+    return { bookedDates, availableDates };
   }
 
-  // Validate and calculate checkout time and end date based on booking type
   private validateAndCalculateCheckoutTime(
     bookingDate: string,
     bookingTimeFrom: string,
@@ -246,7 +227,6 @@ export class BookingService {
         return { isValid: false, error: 'Invalid booking type' };
       }
 
-      // Parse time from string (format: HH:MM)
       const [hours, minutes] = bookingTimeFrom.split(':').map(Number);
       if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
         return { isValid: false, error: 'Invalid booking time format. Use HH:MM format' };
@@ -257,29 +237,20 @@ export class BookingService {
       let checkoutMinutes = minutes;
 
       if (is24Hour) {
-        // For 24-hour booking: checkout is next day at the same time
         checkoutDate.setDate(checkoutDate.getDate() + 1);
       } else if (is12Hour) {
-        // For 12-hour booking: checkout is same day, 12 hours later
         checkoutHours = hours + 12;
         if (checkoutHours >= 24) {
           checkoutHours -= 24;
           checkoutDate.setDate(checkoutDate.getDate() + 1);
-        } else {
-          // For 12HR bookings, end date is same as start date (unless checkout crosses midnight)
-          // Keep checkoutDate as the same day
         }
       }
 
-      // Format checkout time as HH:MM
       const calculatedCheckoutTime = `${checkoutHours.toString().padStart(2, '0')}:${checkoutMinutes.toString().padStart(2, '0')}`;
 
-      // For 12HR bookings, ensure end date is same as start date (unless checkout time crosses midnight)
       if (is12Hour && checkoutHours < hours) {
-        // Checkout crossed midnight, so end date is next day
-        // checkoutDate is already set correctly
+        // Checkout crossed midnight
       } else if (is12Hour) {
-        // Checkout is same day, so end date should be same as start date
         checkoutDate = new Date(bookingDateOnly);
       }
 
@@ -310,12 +281,180 @@ export class BookingService {
       throw new BadRequestException(`Price option not found for booking type: ${bookingType}`);
     }
 
-    // Check if number of persons exceeds maxPeople
     if (numberOfPersons > priceOption.maxPeople) {
       throw new BadRequestException(`Maximum ${priceOption.maxPeople} persons allowed for this booking type`);
     }
 
     return parseFloat(priceOption.price.toString());
+  }
+
+  // === Farmhouse time helpers ===
+
+  private calculateCheckOutWithFarmhouseTime(checkIn: Date, bookingType: string, farmhouseCheckOutTo: string = '22:00'): Date {
+    const out = new Date(checkIn);
+
+    // Parse check-out time
+    const [hours, minutes] = farmhouseCheckOutTo.split(':').map(Number);
+
+    if (bookingType.includes('24HR')) {
+      // 24HR: next day at check-out time
+      out.setDate(out.getDate() + 1);
+      out.setHours(hours || 10, minutes || 0, 0, 0);
+    } else {
+      // 12HR: same day, use check-out time
+      out.setHours(hours || 22, minutes || 0, 0, 0);
+    }
+
+    return out;
+  }
+
+  private isOverlappingWithFarmhouseTimes(existing: any, newCheckIn: Date, newCheckOut: Date, farmhouse: any): boolean {
+    const exCI = this.deriveCheckInFromRecordWithFarmhouse(existing, farmhouse);
+    const exCO = this.deriveCheckOutFromRecordWithFarmhouse(existing, farmhouse);
+    return newCheckIn < exCO && newCheckOut > exCI;
+  }
+
+  private deriveCheckInFromRecordWithFarmhouse(booking: any, farmhouse: any): Date {
+    const bd = booking.bookingDate ? new Date(booking.bookingDate) : null;
+    const base = bd ? new Date(bd) : new Date();
+
+    if (booking.bookingTimeFrom) {
+      const [h, m] = (booking.bookingTimeFrom || '09:00').split(':').map(Number);
+      base.setHours(h, m, 0, 0);
+    } else {
+      const checkInTime = farmhouse?.checkInFrom || '10:00';
+      const [h, m] = checkInTime.split(':').map(Number);
+      base.setHours(h || 10, m || 0, 0, 0);
+    }
+    return base;
+  }
+
+  private deriveCheckOutFromRecordWithFarmhouse(booking: any, farmhouse: any): Date {
+    if (booking.bookingEndDate) {
+      const ed = new Date(booking.bookingEndDate);
+      if (booking.bookingTimeTo) {
+        const [h, m] = (booking.bookingTimeTo || '09:00').split(':').map(Number);
+        ed.setHours(h, m, 0, 0);
+      } else {
+        if (booking.bookingType && booking.bookingType.includes('24HR')) {
+          const checkOutTime = farmhouse?.checkInFrom || '10:00';
+          const [h, m] = checkOutTime.split(':').map(Number);
+          ed.setHours(h || 10, m || 0, 0, 0);
+        } else {
+          const checkOutTime = farmhouse?.checkOutTo || '22:00';
+          const [h, m] = checkOutTime.split(':').map(Number);
+          ed.setHours(h || 22, m || 0, 0, 0);
+        }
+      }
+      return ed;
+    }
+
+    const ci = this.deriveCheckInFromRecordWithFarmhouse(booking, farmhouse);
+    return this.calculateCheckOutWithFarmhouseTime(ci, booking.bookingType || 'REGULAR_12HR', farmhouse?.checkOutTo);
+  }
+
+  // Update user booking history
+  private async updateUserBookingHistory(
+    userId: number,
+    farmhouseId: number,
+    bookingDate: string,
+    bookingType: string,
+    rent: number
+  ) {
+    try {
+      const user = await this.userModel.findByPk(userId);
+      if (!user) return;
+
+      const bookingHistory: any[] = (user as any).bookingHistory || [];
+      bookingHistory.push({
+        farmhouseId,
+        bookingDate,
+        bookingType,
+        rent,
+        bookedAt: new Date().toISOString(),
+      });
+
+      await user.update({
+        bookingHistory: bookingHistory,
+        isAnyFarmBooked: true,
+      } as any);
+    } catch (error) {
+      console.error('Error updating user booking history:', error);
+    }
+  }
+
+  // Update most visited status
+  private async updateMostVisitedStatus(farmhouseId: number) {
+    try {
+      const bookingCount = await this.bookingModel.count({
+        where: {
+          farmhouseId,
+          paymentStatus: { [Op.ne]: 'cancel' },
+        },
+      });
+
+      const allFarmhouses = await this.farmhouseModel.findAll();
+      const farmhouseCounts = await Promise.all(
+        allFarmhouses.map(async (farm) => ({
+          id: farm.id,
+          count: await this.bookingModel.count({
+            where: {
+              farmhouseId: farm.id,
+              paymentStatus: { [Op.ne]: 'cancel' },
+            },
+          }),
+        }))
+      );
+
+      const maxCount = Math.max(...farmhouseCounts.map(f => f.count));
+      const mostVisitedFarmId = farmhouseCounts.find(f => f.count === maxCount)?.id;
+
+      for (const farm of allFarmhouses) {
+        await farm.update({
+          isMostVisited: farm.id === mostVisitedFarmId && maxCount > 0,
+        } as any);
+      }
+    } catch (error) {
+      console.error('Error updating most visited status:', error);
+    }
+  }
+
+  // =================== AUTO STATUS UPDATE METHODS ===================
+
+  /**
+   * Check and auto-update booking status if needed
+   * This runs automatically on every API call
+   */
+  private async checkAndAutoUpdateStatus(): Promise<void> {
+    try {
+      // Check for bookings that need status update
+      const now = new Date();
+      const bookingsToUpdate = await this.bookingModel.findAll({
+        where: {
+          nextStatusCheckAt: {
+            [Op.lte]: now,
+            [Op.ne]: null
+          },
+          bookingStatus: { [Op.in]: ['upcoming', 'current'] }
+        },
+        include: [{ model: Farmhouse, as: 'farmhouse' }]
+      });
+
+      for (const booking of bookingsToUpdate) {
+        try {
+          // Use the entity's updateStatus method
+          const changed = await (booking as any).updateStatus();
+          if (changed) {
+            await booking.save();
+            console.log(`✅ Auto-updated booking ${booking.id} status`);
+          }
+        } catch (error) {
+          console.error(`❌ Error auto-updating booking ${booking.id}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error('Error in auto status update check:', error);
+    }
   }
 
   // Create booking
@@ -335,30 +474,40 @@ export class BookingService {
         originalPrice,
         isLoggedIn = false,
         paymentStatus = 'incomplete',
+        paidAmount = 0,
+        remainingAmount: providedRemainingAmount,
         farmStatus = 'available',
         bookingData,
       } = createBookingDto;
 
-      // Check if user exists (by userId or reqUser)
+      // Validate partial payment
+      if (paymentStatus === 'partial') {
+        if (!paidAmount || paidAmount <= 0) {
+          return new ApiResponse(true, 'For partial payment, paid amount is required', null);
+        }
+
+        if (paidAmount >= (originalPrice || 0)) {
+          return new ApiResponse(true, 'For partial payment, paid amount must be less than total price', null);
+        }
+      }
+
+      // Check if user exists
       let finalUserId: number | null = null;
       let finalIsLoggedIn = false;
 
-      // If userId is provided, check if user exists
       if (userId) {
         const existingUser = await this.userModel.findByPk(userId);
         if (existingUser) {
           finalUserId = userId;
-          finalIsLoggedIn = true; // User exists, so they are logged in
+          finalIsLoggedIn = true;
         }
       }
 
-      // If reqUser is provided, use that
       if (!finalUserId && reqUser && reqUser.id) {
         finalUserId = reqUser.id;
         finalIsLoggedIn = true;
       }
 
-      // If user doesn't exist, create new user with isLoggedIn: false
       if (!finalUserId) {
         if (!customerName || (!customerMobile && !customerEmail)) {
           return new ApiResponse(true, 'Customer name and at least one of mobile/email are required', null);
@@ -366,96 +515,143 @@ export class BookingService {
 
         const user = await this.findOrCreateUser(customerName, customerMobile, customerEmail);
         finalUserId = user.id;
-        finalIsLoggedIn = false; // New user created, not logged in
+        finalIsLoggedIn = false;
       }
 
-      // Override with provided isLoggedIn if explicitly set
       if (isLoggedIn !== undefined && isLoggedIn !== null) {
         finalIsLoggedIn = isLoggedIn;
       }
 
       const loggedIn = finalIsLoggedIn;
 
-      // Check if farmhouse exists
+      // Check farmhouse
       const farmhouse = await this.farmhouseModel.findByPk(farmhouseId, {
-        include: [
-          {
-            model: PriceOption,
-            as: 'priceOptions',
-          },
-        ],
+        include: [{ model: PriceOption, as: 'priceOptions' }],
       });
 
       if (!farmhouse) {
         return new ApiResponse(true, 'Farmhouse not found', null);
       }
 
-      // Check if farmhouse is available
       if (farmhouse.status === false) {
         return new ApiResponse(true, 'Farmhouse is not available', null);
       }
 
-      // === Calculate definitive checkIn/checkOut and prevent overlapping bookings ===
-      // We enforce checkIn at 09:00 and calculate checkout from bookingType
-      const newCheckIn = this.calculateCheckIn(bookingDate);
-      const newCheckOut = this.calculateCheckOut(newCheckIn, bookingType);
-      const is24Hour = bookingType.includes('24HR');
-      const nextAvailableDate = this.calculateNextAvailableDate(newCheckOut, bookingType);
+      // =================== FIX TIMEZONE ISSUE ===================
 
-      // Prepare standard times to store
-      const finalBookingTimeFrom = '09:00';
+      // Get farmhouse check-in/check-out times
+      const farmhouseCheckInFrom = farmhouse.checkInFrom || '10:00';
+      const farmhouseCheckOutTo = farmhouse.checkOutTo || '22:00';
+
+      // Parse booking date string
+      let bookingDateStr: string;
+
+      if (typeof bookingDate === 'string') {
+        bookingDateStr = bookingDate;
+      } else if (bookingDate && typeof bookingDate === 'object') {
+        // Type guard for Date object
+        const dateObj = bookingDate as any;
+        if (dateObj.toISOString) {
+          bookingDateStr = dateObj.toISOString().split('T')[0];
+        } else {
+          // Fallback to current date
+          bookingDateStr = new Date().toISOString().split('T')[0];
+        }
+      } else {
+        bookingDateStr = new Date().toISOString().split('T')[0];
+      }
+
+      // Create check-in date
+      const [year, month, day] = bookingDateStr.split('-').map(Number);
+      const checkInDate = new Date(year, month - 1, day);
+
+      // Parse farmhouse check-in time
+      const [checkInHours, checkInMinutes] = farmhouseCheckInFrom.split(':').map(Number);
+
+      // Set check-in time (local time)
+      checkInDate.setHours(checkInHours || 10, checkInMinutes || 0, 0, 0);
+
+      const newCheckIn = checkInDate;
+      const newCheckOut = this.calculateCheckOutWithFarmhouseTime(newCheckIn, bookingType, farmhouseCheckOutTo);
+
+      // Format times for database
+      const finalBookingTimeFrom = farmhouseCheckInFrom;
       const finalBookingTimeTo = (() => {
         const h = newCheckOut.getHours().toString().padStart(2, '0');
         const m = newCheckOut.getMinutes().toString().padStart(2, '0');
         return `${h}:${m}`;
       })();
 
-      // 6. Prevent overlapping bookings - fetch all non-cancel bookings for this farmhouse and check in JS
+      // Check overlapping bookings
       const existingBookings = await this.bookingModel.findAll({
         where: { farmhouseId, paymentStatus: { [Op.ne]: 'cancel' } },
       });
 
       for (const ex of existingBookings) {
-        if (this.isOverlapping(ex, newCheckIn, newCheckOut)) {
+        if (this.isOverlappingWithFarmhouseTimes(ex, newCheckIn, newCheckOut, farmhouse)) {
           return new ApiResponse(true, 'Farmhouse already booked for this time', null);
         }
       }
 
-      // Update bookingEndDate to the calculated checkOut datetime
-      let bookingEndDate = newCheckOut;
-
-      // Get price from farm's price options if not provided, otherwise use provided price
+      // Calculate price
       let finalPrice = originalPrice;
       if (!originalPrice || originalPrice === 0) {
         finalPrice = await this.getPriceFromFarm(farmhouseId, bookingType, numberOfPersons);
       }
 
-      // Calculate discount
       const discountAmount = this.calculateDiscount(finalPrice, loggedIn);
       const finalPriceAfterDiscount = finalPrice - discountAmount;
-
-      // Calculate hours from booking type
       const bookingHours = this.calculateHoursFromBookingType(bookingType);
 
-      // Calculate available dates (not stored in DB, just for response)
-      const availableDates = this.calculateAvailableDates(
-        newCheckIn,
-        bookingEndDate,
-        bookingType
-      );
+      // Calculate available dates
+      const availableDates = this.calculateAvailableDates(newCheckIn, newCheckOut, bookingType);
 
       // Generate invoice token
       const invoiceToken = this.generateInvoiceToken();
 
-      // Create booking
-      const booking = await this.bookingModel.create({
+      // Calculate initial booking status
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const checkInOnlyDate = new Date(newCheckIn);
+      checkInOnlyDate.setHours(0, 0, 0, 0);
+
+      const checkOutOnlyDate = new Date(newCheckOut);
+      checkOutOnlyDate.setHours(0, 0, 0, 0);
+
+      let initialBookingStatus: 'upcoming' | 'current' | 'expired' = 'upcoming';
+
+      if (checkInOnlyDate > today) {
+        initialBookingStatus = 'upcoming';
+      } else if (checkInOnlyDate <= today && checkOutOnlyDate >= today) {
+        initialBookingStatus = 'current';
+      } else if (checkOutOnlyDate < today) {
+        initialBookingStatus = 'expired';
+      }
+
+      // Calculate next status check time
+      let nextStatusCheckAt: Date | null = null;
+      if (initialBookingStatus === 'upcoming') {
+        nextStatusCheckAt = newCheckIn;
+      } else if (initialBookingStatus === 'current') {
+        nextStatusCheckAt = newCheckOut;
+      }
+
+      // Calculate remaining amount for partial payment
+      let finalRemainingAmount = providedRemainingAmount;
+      if (paymentStatus === 'partial' && finalRemainingAmount === undefined) {
+        finalRemainingAmount = finalPriceAfterDiscount - paidAmount;
+      }
+
+      // Prepare booking data
+      const bookingDataToCreate: any = {
         userId: finalUserId,
         farmhouseId,
         customerName: loggedIn ? null : customerName,
         customerMobile: loggedIn ? null : customerMobile,
         customerEmail: loggedIn ? null : customerEmail,
         bookingDate: newCheckIn,
-        bookingEndDate: bookingEndDate,
+        bookingEndDate: newCheckOut,
         bookingTimeFrom: finalBookingTimeFrom,
         bookingTimeTo: finalBookingTimeTo,
         bookingHours,
@@ -464,34 +660,133 @@ export class BookingService {
         originalPrice: finalPrice,
         discountAmount,
         finalPrice: finalPriceAfterDiscount,
-        isLoggedIn: finalIsLoggedIn, // Always set to boolean value
+        isLoggedIn: finalIsLoggedIn,
         paymentStatus,
-        farmStatus: 'unavailable',
-        bookingData,
+        farmStatus: paymentStatus === 'cancel' ? 'available' : 'unavailable',
+        bookingStatus: initialBookingStatus,
+        nextStatusCheckAt,
         invoiceToken,
-      } as any);
+      };
 
-      // Update user booking history
-      await this.updateUserBookingHistory(finalUserId, farmhouseId, newCheckIn.toISOString().split('T')[0], bookingType, finalPriceAfterDiscount);
+      // Add partial payment columns if payment is partial
+      if (paymentStatus === 'partial') {
+        bookingDataToCreate.partialPaidAmount = paidAmount;
+        bookingDataToCreate.remainingAmount = finalRemainingAmount;
+        bookingDataToCreate.partialPaymentDetails = {
+          paidAmount,
+          remainingAmount: finalRemainingAmount,
+          updatedAt: new Date().toISOString()
+        };
+      }
 
-      // Update farmhouse most visited status
+      interface PaymentHistoryItem {
+        status: 'paid' | 'partial' | 'incomplete' | 'cancel';
+        amount: number;
+        partialDetails?: {
+          paidAmount: number;
+          remainingAmount: number;
+          updatedAt: string;
+        };
+        updatedAt: string;
+      }
+
+      interface PartialPaymentDetails {
+        paidAmount: number;
+        remainingAmount: number;
+        updatedAt: string;
+      }
+
+      interface BookingDataWithHistory {
+        paymentHistory?: PaymentHistoryItem[];
+        lastPaymentUpdate?: string;
+        partialPaymentDetails?: PartialPaymentDetails;
+        [key: string]: any; // For other properties in bookingData
+      }
+      // Prepare bookingData with payment history
+      const baseBookingData: BookingDataWithHistory = bookingData || {};
+      const paymentHistory: PaymentHistoryItem[] = baseBookingData.paymentHistory || [];
+
+      // Add initial payment record
+      const initialPayment: PaymentHistoryItem = {
+        status: paymentStatus,
+        amount: finalPriceAfterDiscount,
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (paymentStatus === 'partial' && finalRemainingAmount !== undefined) {
+        initialPayment.partialDetails = {
+          paidAmount,
+          remainingAmount: finalRemainingAmount,
+          updatedAt: new Date().toISOString()
+        };
+      }
+
+      paymentHistory.push(initialPayment);
+
+      // Set bookingData with payment history
+      bookingDataToCreate.bookingData = {
+        ...baseBookingData,
+        paymentHistory,
+        lastPaymentUpdate: new Date().toISOString(),
+      };
+
+      // If partial payment, add partialPaymentDetails to bookingData
+      if (paymentStatus === 'partial' && finalRemainingAmount !== undefined) {
+        bookingDataToCreate.bookingData.partialPaymentDetails = {
+          paidAmount,
+          remainingAmount: finalRemainingAmount,
+          updatedAt: new Date().toISOString()
+        };
+      }
+
+      // Create booking
+      const booking = await this.bookingModel.create(bookingDataToCreate);
+
+      // Update user history
+      await this.updateUserBookingHistory(
+        finalUserId,
+        farmhouseId,
+        checkInOnlyDate.toISOString().split('T')[0],
+        bookingType,
+        finalPriceAfterDiscount
+      );
+
+      // Update most visited status
       await this.updateMostVisitedStatus(farmhouseId);
 
-      // Fetch complete booking with relations
+      // Get created booking with proper date formatting
       const createdBooking = await this.findById(booking.id);
 
-      return new ApiResponse(false, 'Booking created successfully', {
+      if (!createdBooking) {
+        return new ApiResponse(true, 'Failed to retrieve created booking', null);
+      }
+
+      // Add partial payment details to response if applicable
+      const responseData: any = {
         ...createdBooking.data,
-        invoiceToken, // Return token for immediate access
-        availableDates, // Available dates (not stored in DB)
-      });
-    } catch (error) {
-      // Provide more detailed error messages
+        invoiceToken,
+        availableDates,
+      };
+
+      if (paymentStatus === 'partial' && finalRemainingAmount !== undefined) {
+        responseData.partialPayment = {
+          paidAmount,
+          remainingAmount: finalRemainingAmount,
+          totalAmount: finalPriceAfterDiscount,
+          updatedAt: new Date().toISOString()
+        };
+      }
+
+      return new ApiResponse(
+        false,
+        'Booking created successfully' + (paymentStatus === 'partial' ? ` (₹${paidAmount} paid, ₹${finalRemainingAmount} remaining)` : ''),
+        responseData
+      );
+    } catch (error: any) {
       let errorMessage = 'Error creating booking';
       let errorData: any = null;
 
       if (error.name === 'SequelizeValidationError') {
-        // Get unique error messages (avoid duplicates)
         const uniqueErrors = new Map<string, string>();
         error.errors?.forEach((err: any) => {
           if (!uniqueErrors.has(err.path)) {
@@ -510,89 +805,103 @@ export class BookingService {
       } else if (error.message) {
         errorMessage = error.message;
         errorData = error.message;
+      } else {
+        errorData = error;
       }
 
       return new ApiResponse(true, errorMessage, errorData);
     }
   }
 
-  // Update user booking history
-  private async updateUserBookingHistory(
-    userId: number,
-    farmhouseId: number,
-    bookingDate: string,
-    bookingType: string,
-    rent: number
-  ) {
-    try {
-      const user = await this.userModel.findByPk(userId);
-      if (!user) return;
+  private getBookingDatesFromRecord(booking: any): {
+    checkInDate: Date;
+    checkOutDate: Date;
+  } {
+    let checkInDate: Date;
+    let checkOutDate: Date;
 
-      // Get existing booking history or initialize
-      const bookingHistory: any[] = (user as any).bookingHistory || [];
-
-      // Add new booking entry
-      bookingHistory.push({
-        farmhouseId,
-        bookingDate,
-        bookingType,
-        rent,
-        bookedAt: new Date().toISOString(),
-      });
-
-      // Update user
-      await user.update({
-        bookingHistory: bookingHistory,
-        isAnyFarmBooked: true,
-      } as any);
-    } catch (error) {
-      console.error('Error updating user booking history:', error);
-    }
-  }
-
-  // Update most visited status
-  private async updateMostVisitedStatus(farmhouseId: number) {
-    try {
-      // Count bookings for this farmhouse
-      const bookingCount = await this.bookingModel.count({
-        where: {
-          farmhouseId,
-          paymentStatus: { [Op.ne]: 'cancel' },
-        },
-      });
-
-      // Get all farmhouses and their booking counts
-      const allFarmhouses = await this.farmhouseModel.findAll();
-      const farmhouseCounts = await Promise.all(
-        allFarmhouses.map(async (farm) => ({
-          id: farm.id,
-          count: await this.bookingModel.count({
-            where: {
-              farmhouseId: farm.id,
-              paymentStatus: { [Op.ne]: 'cancel' },
-            },
-          }),
-        }))
-      );
-
-      // Find the farmhouse with most bookings
-      const maxCount = Math.max(...farmhouseCounts.map(f => f.count));
-      const mostVisitedFarmId = farmhouseCounts.find(f => f.count === maxCount)?.id;
-
-      // Update all farmhouses
-      for (const farm of allFarmhouses) {
-        await farm.update({
-          isMostVisited: farm.id === mostVisitedFarmId && maxCount > 0,
-        } as any);
+    // Get check-in date - handle both Date object and string
+    if (booking.bookingDate) {
+      if (typeof booking.bookingDate === 'string') {
+        // Parse string date (YYYY-MM-DD)
+        const [year, month, day] = booking.bookingDate.split('-').map(Number);
+        checkInDate = new Date(year, month - 1, day);
+      } else if (booking.bookingDate instanceof Date) {
+        checkInDate = new Date(booking.bookingDate);
+      } else {
+        const today = new Date();
+        checkInDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
       }
-    } catch (error) {
-      console.error('Error updating most visited status:', error);
+    } else {
+      const today = new Date();
+      checkInDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     }
+
+    // Get check-out date
+    if (booking.bookingEndDate) {
+      if (typeof booking.bookingEndDate === 'string') {
+        const [year, month, day] = booking.bookingEndDate.split('-').map(Number);
+        checkOutDate = new Date(year, month - 1, day);
+      } else if (booking.bookingEndDate instanceof Date) {
+        checkOutDate = new Date(booking.bookingEndDate);
+      } else {
+        // Calculate based on booking type
+        checkOutDate = new Date(checkInDate);
+        if (booking.bookingType?.includes('24HR')) {
+          checkOutDate.setDate(checkOutDate.getDate() + 1);
+        }
+      }
+    } else {
+      // Calculate check-out based on booking type
+      checkOutDate = new Date(checkInDate);
+      if (booking.bookingType?.includes('24HR')) {
+        checkOutDate.setDate(checkOutDate.getDate() + 1);
+      }
+    }
+
+    return { checkInDate, checkOutDate };
   }
 
-  // Get booking by ID
+  private calculateDateBasedStatus(
+    checkInDate: Date,
+    checkOutDate: Date,
+    currentBookingStatus?: string
+  ): 'upcoming' | 'current' | 'expired' {
+    const today = new Date();
+    // Set today to beginning of day (local time)
+    today.setHours(0, 0, 0, 0);
+
+    // Ensure dates are at beginning of day
+    const checkIn = new Date(checkInDate);
+    checkIn.setHours(0, 0, 0, 0);
+
+    const checkOut = new Date(checkOutDate);
+    checkOut.setHours(0, 0, 0, 0);
+
+    // If check-in is in future
+    if (checkIn > today) {
+      return 'upcoming';
+    }
+
+    // If check-in is today or in past AND check-out is in future or today
+    if (checkIn <= today && checkOut >= today) {
+      return 'current';
+    }
+
+    // If check-out is in past
+    if (checkOut < today) {
+      return 'expired';
+    }
+
+    // Fallback to current database status
+    return currentBookingStatus as any || 'upcoming';
+  }
+
   async findById(id: number) {
     try {
+      // ✅ Auto-check status before fetching
+      await this.checkAndAutoUpdateStatus();
+
       const booking = await this.bookingModel.findByPk(id, {
         include: [
           {
@@ -604,7 +913,7 @@ export class BookingService {
           {
             model: Farmhouse,
             as: 'farmhouse',
-            attributes: ['id', 'name', 'slug', 'farmNo'],
+            attributes: ['id', 'name', 'slug', 'farmNo', 'checkInFrom', 'checkOutTo'],
           },
         ],
       });
@@ -613,24 +922,55 @@ export class BookingService {
         return new ApiResponse(true, 'Booking not found', null);
       }
 
-      // Format booking with all requested details
       const bookingData = booking.toJSON();
-      const startDate = new Date(bookingData.bookingDate);
-      startDate.setHours(0, 0, 0, 0);
+      const farmhouseData = bookingData.farmhouse;
 
-      // For end date, if it exists use it, otherwise use start date
-      let endDate = startDate;
-      if (bookingData.bookingEndDate) {
-        endDate = new Date(bookingData.bookingEndDate);
-        endDate.setHours(0, 0, 0, 0);
-      } else {
-        // If no end date, for 12HR it's same day, for 24HR it's next day
-        const is24Hour = bookingData.bookingType?.includes('24HR');
-        if (is24Hour) {
-          endDate = new Date(startDate);
-          endDate.setDate(endDate.getDate() + 1);
+      // Get dates using the helper method
+      const { checkInDate, checkOutDate } = this.getBookingDatesFromRecord(bookingData);
+
+      // Calculate date-based status
+      const dateBasedStatus = this.calculateDateBasedStatus(
+        checkInDate,
+        checkOutDate,
+        bookingData.bookingStatus
+      );
+
+      // Calculate payment amounts using safe parser
+      const totalAmount = this.safeParseNumber(bookingData.finalPrice);
+      const paidAmount = this.safeParseNumber(bookingData.partialPaidAmount);
+      const remainingAmount = this.safeParseNumber(bookingData.remainingAmount, totalAmount);
+
+      // Calculate final remaining amount
+      const finalRemainingAmount = bookingData.remainingAmount !== undefined
+        ? remainingAmount
+        : Math.max(0, totalAmount - paidAmount);
+
+      // Create partial payment object if payment status is partial
+      let partialPayment: PartialPaymentResponse | null = null;
+      if (bookingData.paymentStatus === 'partial') {
+        partialPayment = {
+          paidAmount: paidAmount,
+          remainingAmount: finalRemainingAmount,
+          totalAmount: totalAmount,
+          notes: 'Partial payment details',
+        };
+
+        // Check if there are notes in bookingData or partialPaymentDetails
+        if (bookingData.bookingData?.partialPaymentDetails?.notes) {
+          partialPayment.notes = bookingData.bookingData.partialPaymentDetails.notes;
         }
+      } else if (bookingData.paymentStatus === 'paid') {
+        partialPayment = {
+          paidAmount: totalAmount,
+          remainingAmount: 0,
+          totalAmount: totalAmount,
+          notes: 'Full payment received',
+        };
       }
+
+      // Format dates for display (YYYY-MM-DD)
+      const startDateStr = checkInDate.toISOString().split('T')[0];
+      const endDateStr = checkOutDate.toISOString().split('T')[0];
 
       const formattedBooking = {
         id: bookingData.id,
@@ -641,23 +981,31 @@ export class BookingService {
           mobileNo: bookingData.user?.mobileNo || bookingData.customerMobile || 'N/A',
         },
         farmhouse: {
-          id: bookingData.farmhouse?.id,
-          name: bookingData.farmhouse?.name,
-          slug: bookingData.farmhouse?.slug,
-          farmNo: bookingData.farmhouse?.farmNo,
+          id: farmhouseData?.id,
+          name: farmhouseData?.name,
+          slug: farmhouseData?.slug,
+          farmNo: farmhouseData?.farmNo,
+          checkInFrom: farmhouseData?.checkInFrom || '10:00',
+          checkOutTo: farmhouseData?.checkOutTo || '22:00',
         },
-        startDate: startDate.toISOString().split('T')[0],
-        endDate: endDate.toISOString().split('T')[0],
+        startDate: startDateStr,
+        endDate: endDateStr,
         checkInTime: bookingData.bookingTimeFrom,
         checkOutTime: bookingData.bookingTimeTo,
         numberOfPersons: bookingData.numberOfPersons,
-        paymentStatus: bookingData.paymentStatus,
-        discountAmount: parseFloat(bookingData.discountAmount?.toString() || '0'),
-        finalTotal: parseFloat(bookingData.finalPrice?.toString() || '0'),
-        originalPrice: parseFloat(bookingData.originalPrice?.toString() || '0'),
+        paymentStatus: bookingData.paymentStatus || 'incomplete',
+        bookingStatus: dateBasedStatus,
+        discountAmount: this.safeParseNumber(bookingData.discountAmount),
+        finalTotal: totalAmount,
+        originalPrice: this.safeParseNumber(bookingData.originalPrice),
         bookingHours: bookingData.bookingHours || this.calculateHoursFromBookingType(bookingData.bookingType),
-        bookingType: bookingData.bookingType,
+        bookingType: bookingData.bookingType || 'REGULAR_12HR',
         invoiceToken: bookingData.invoiceToken,
+        nextStatusCheckAt: bookingData.nextStatusCheckAt,
+        // Add payment details
+        paidAmount: paidAmount,
+        remainingAmount: finalRemainingAmount,
+        partialPayment: partialPayment,
         createdAt: bookingData.createdAt,
         updatedAt: bookingData.updatedAt,
       };
@@ -671,10 +1019,11 @@ export class BookingService {
   // Get user orders (if logged in)
   async getUserOrders(userId: number) {
     try {
+      // ✅ Auto-check status before fetching
+      await this.checkAndAutoUpdateStatus();
+
       const bookings = await this.bookingModel.findAll({
-        where: {
-          userId,
-        },
+        where: { userId },
         include: [
           {
             model: Farmhouse,
@@ -685,25 +1034,58 @@ export class BookingService {
         order: [['bookingDate', 'DESC']],
       });
 
-      // Format bookings with all requested details
-      const formattedBookings = bookings.map((booking: any) => {
+      const formattedBookings = bookings.map((booking: Booking) => {
         const bookingData = booking.toJSON();
-        const startDate = new Date(bookingData.bookingDate);
+
+        // Get dates for status calculation
+        const { checkInDate, checkOutDate } = this.getBookingDatesFromRecord(bookingData);
+
+        // ✅ Calculate date-based status
+        const dateBasedStatus = this.calculateDateBasedStatus(
+          checkInDate,
+          checkOutDate,
+          bookingData.bookingStatus
+        );
+
+        // Calculate payment amounts using safe parser
+        const totalAmount = this.safeParseNumber(bookingData.finalPrice);
+        const paidAmount = this.safeParseNumber(bookingData.partialPaidAmount);
+        const remainingAmount = this.safeParseNumber(bookingData.remainingAmount, totalAmount);
+
+        // Calculate final remaining amount
+        const finalRemainingAmount = bookingData.remainingAmount !== undefined
+          ? remainingAmount
+          : Math.max(0, totalAmount - paidAmount);
+
+        // Create partial payment object if payment status is partial
+        let partialPayment: PartialPaymentResponse | null = null;
+        if (bookingData.paymentStatus === 'partial') {
+          partialPayment = {
+            paidAmount: paidAmount,
+            remainingAmount: finalRemainingAmount,
+            totalAmount: totalAmount,
+            notes: 'Partial payment details',
+          };
+
+          // Check if there are notes in bookingData
+          if (bookingData.bookingData?.partialPaymentDetails?.notes) {
+            partialPayment.notes = bookingData.bookingData.partialPaymentDetails.notes;
+          }
+        } else if (bookingData.paymentStatus === 'paid') {
+          partialPayment = {
+            paidAmount: totalAmount,
+            remainingAmount: 0,
+            totalAmount: totalAmount,
+            notes: 'Full payment received',
+          };
+        }
+
+        // Format dates for display
+        const startDate = new Date(checkInDate);
         startDate.setHours(0, 0, 0, 0);
 
-        // For end date, if it exists use it, otherwise calculate based on booking type
-        let endDate = startDate;
-        if (bookingData.bookingEndDate) {
-          endDate = new Date(bookingData.bookingEndDate);
-          endDate.setHours(0, 0, 0, 0);
-        } else {
-          // If no end date, for 12HR it's same day, for 24HR it's next day
-          const is24Hour = bookingData.bookingType?.includes('24HR');
-          if (is24Hour) {
-            endDate = new Date(startDate);
-            endDate.setDate(endDate.getDate() + 1);
-          }
-        }
+        const endDate = new Date(checkOutDate);
+        endDate.setHours(0, 0, 0, 0);
 
         return {
           id: bookingData.id,
@@ -718,13 +1100,19 @@ export class BookingService {
           checkInTime: bookingData.bookingTimeFrom,
           checkOutTime: bookingData.bookingTimeTo,
           numberOfPersons: bookingData.numberOfPersons,
-          paymentStatus: bookingData.paymentStatus,
-          discountAmount: parseFloat(bookingData.discountAmount?.toString() || '0'),
-          finalTotal: parseFloat(bookingData.finalPrice?.toString() || '0'),
-          originalPrice: parseFloat(bookingData.originalPrice?.toString() || '0'),
+          paymentStatus: bookingData.paymentStatus || 'incomplete',
+          bookingStatus: dateBasedStatus,
+          discountAmount: this.safeParseNumber(bookingData.discountAmount),
+          finalTotal: totalAmount,
+          originalPrice: this.safeParseNumber(bookingData.originalPrice),
           bookingHours: bookingData.bookingHours || this.calculateHoursFromBookingType(bookingData.bookingType),
-          bookingType: bookingData.bookingType,
+          bookingType: bookingData.bookingType || 'REGULAR_12HR',
           invoiceToken: bookingData.invoiceToken,
+          nextStatusCheckAt: bookingData.nextStatusCheckAt,
+          // Add payment details
+          paidAmount: paidAmount,
+          remainingAmount: finalRemainingAmount,
+          partialPayment: partialPayment,
           createdAt: bookingData.createdAt,
         };
       });
@@ -738,7 +1126,9 @@ export class BookingService {
   // Get available farms for a specific date
   async getAvailableFarms(bookingDate?: string, bookingType?: string) {
     try {
-      // If no date → return all active farms directly
+      // ✅ Auto-check status before fetching (for any active bookings)
+      await this.checkAndAutoUpdateStatus();
+
       if (!bookingDate) {
         const allFarms = await this.farmhouseModel.findAll({
           where: { status: true },
@@ -793,10 +1183,9 @@ export class BookingService {
         });
       }
 
-      // 🟦 If date exists → check availability based on booking type
       const date = new Date(bookingDate);
       date.setHours(0, 0, 0, 0);
-      const dateStr = date.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+      const dateStr = date.toISOString().split('T')[0];
       const nextDay = new Date(date);
       nextDay.setDate(nextDay.getDate() + 1);
       nextDay.setHours(0, 0, 0, 0);
@@ -817,91 +1206,60 @@ export class BookingService {
         ],
       });
 
-      // Get all bookings that could affect availability for this date
-      // For 24HR bookings: check if booking date or end date overlaps with requested date
-      // For 12HR bookings: only check if booking date matches
       const bookings = await this.bookingModel.findAll({
         where: {
           paymentStatus: { [Op.ne]: 'cancel' },
           [Op.or]: [
-            // 24HR bookings: check if start date or end date overlaps
             {
               bookingType: { [Op.like]: '%24HR%' },
               [Op.or]: [
-                {
-                  bookingDate: {
-                    [Op.gte]: date,
-                    [Op.lt]: nextDay,
-                  },
-                },
-                {
-                  bookingEndDate: {
-                    [Op.gte]: date,
-                    [Op.lt]: nextDay,
-                  },
-                },
-                {
-                  bookingDate: { [Op.lte]: date },
-                  bookingEndDate: { [Op.gte]: nextDay },
-                },
+                { bookingDate: { [Op.gte]: date, [Op.lt]: nextDay } },
+                { bookingEndDate: { [Op.gte]: date, [Op.lt]: nextDay } },
+                { bookingDate: { [Op.lte]: date }, bookingEndDate: { [Op.gte]: nextDay } },
               ],
             },
-            // 12HR bookings: only check exact date match (same day)
             {
               bookingType: { [Op.like]: '%12HR%' },
-              bookingDate: {
-                [Op.gte]: date,
-                [Op.lt]: nextDay,
-              },
+              bookingDate: { [Op.gte]: date, [Op.lt]: nextDay },
             },
           ],
         },
         attributes: ['farmhouseId', 'bookingType', 'bookingDate', 'bookingEndDate', 'bookingTimeFrom', 'bookingTimeTo'],
       });
 
-      // Filter out farms that are booked
-      // For 24HR bookings: mark as unavailable if date overlaps
-      // For 12HR bookings: mark as unavailable if exact date matches
       const bookedFarmhouseIds = new Set<number>();
 
       bookings.forEach((booking: any) => {
         const bookingData = booking.toJSON();
         const is24Hour = bookingData.bookingType?.includes('24HR');
 
-        // Normalize dates for comparison
         const bookingStartDate = new Date(bookingData.bookingDate);
         bookingStartDate.setHours(0, 0, 0, 0);
         const bookingDateStr = bookingStartDate.toISOString().split('T')[0];
         const requestedDateStr = dateStr;
 
         if (is24Hour) {
-          // For 24HR bookings, mark start date as unavailable
           if (bookingDateStr === requestedDateStr) {
             bookedFarmhouseIds.add(bookingData.farmhouseId);
           }
 
-          // If end date exists and is different from start date, check if requested date is the end date
           if (bookingData.bookingEndDate) {
             const bookingEndDate = new Date(bookingData.bookingEndDate);
             bookingEndDate.setHours(0, 0, 0, 0);
             const bookingEndDateStr = bookingEndDate.toISOString().split('T')[0];
 
-            // If the requested date is the end date (checkout day) and different from start
             if (bookingEndDateStr === requestedDateStr && bookingDateStr !== requestedDateStr) {
-              // Check if current time is past checkout time
               const [checkoutHour, checkoutMinute] = (bookingData.bookingTimeTo || '12:00').split(':').map(Number);
               const now = new Date();
               const checkoutTime = new Date(date);
               checkoutTime.setHours(checkoutHour, checkoutMinute, 0, 0);
 
-              // If it's before checkout time, still unavailable
               if (now < checkoutTime) {
                 bookedFarmhouseIds.add(bookingData.farmhouseId);
               }
             }
           }
         } else {
-          // For 12HR bookings, mark unavailable if exact date matches
           if (bookingDateStr === requestedDateStr) {
             bookedFarmhouseIds.add(bookingData.farmhouseId);
           }
@@ -954,7 +1312,7 @@ export class BookingService {
     }
   }
 
-  // Get most booked farms (top -> bottom)
+  // Get most booked farms
   async getMostBookedFarms(query: { limit?: number; dateFrom?: string; dateTo?: string }) {
     try {
       const { limit = 10, dateFrom, dateTo } = query || {};
@@ -1002,17 +1360,15 @@ export class BookingService {
     }
   }
 
-
-  // Get farm availability (all bookings)
+  // Get farm availability
   async getFarmAvailability(farmhouseId: number) {
     try {
-      // First, check if farmhouse exists and get its details
+      // ✅ Auto-check status before fetching
+      await this.checkAndAutoUpdateStatus();
+
       const farmhouse = await this.farmhouseModel.findByPk(farmhouseId, {
         include: [
-          {
-            model: Location,
-            as: 'location',
-          },
+          { model: Location, as: 'location' },
           {
             model: FarmhouseImage,
             as: 'images',
@@ -1021,10 +1377,7 @@ export class BookingService {
             order: [['ordering', 'ASC'], ['isMain', 'DESC']],
             limit: 1,
           },
-          {
-            model: PriceOption,
-            as: 'priceOptions',
-          },
+          { model: PriceOption, as: 'priceOptions' },
         ],
       });
 
@@ -1032,12 +1385,8 @@ export class BookingService {
         return new ApiResponse(true, 'Farmhouse not found', null);
       }
 
-      // Get ALL bookings for this farm (past, current, and future)
       const bookings = await this.bookingModel.findAll({
-        where: {
-          farmhouseId,
-          paymentStatus: { [Op.ne]: 'cancel' },
-        },
+        where: { farmhouseId, paymentStatus: { [Op.ne]: 'cancel' } },
         include: [
           {
             model: User,
@@ -1047,38 +1396,28 @@ export class BookingService {
           },
         ],
         attributes: [
-          'id',
-          'userId',
-          'customerName',
-          'customerMobile',
-          'customerEmail',
-          'bookingDate',
-          'bookingEndDate',
-          'bookingTimeFrom',
-          'bookingTimeTo',
-          'bookingHours',
-          'numberOfPersons',
-          'bookingType',
-          'originalPrice',
-          'discountAmount',
-          'finalPrice',
-          'paymentStatus',
-          'farmStatus',
-          'isLoggedIn',
-          'invoiceToken',
-          'createdAt',
-          'updatedAt',
+          'id', 'userId', 'customerName', 'customerMobile', 'customerEmail',
+          'bookingDate', 'bookingEndDate', 'bookingTimeFrom', 'bookingTimeTo',
+          'bookingHours', 'numberOfPersons', 'bookingType', 'originalPrice',
+          'discountAmount', 'finalPrice', 'paymentStatus', 'farmStatus',
+          'isLoggedIn', 'invoiceToken', 'bookingStatus', 'nextStatusCheckAt', // ✅ Add new fields
+          'createdAt', 'updatedAt',
         ],
         order: [['bookingDate', 'DESC']],
       });
 
-      // Format all bookings with complete details
       const bookedDates = bookings.map((booking: any) => {
         const bookingData = booking.toJSON();
-        const startDate = new Date(bookingData.bookingDate);
-        startDate.setHours(0, 0, 0, 0);
-        const endDate = bookingData.bookingEndDate ? new Date(bookingData.bookingEndDate) : startDate;
-        endDate.setHours(0, 0, 0, 0);
+
+        // Get dates for status calculation
+        const { checkInDate, checkOutDate } = this.getBookingDatesFromRecord(bookingData);
+
+        // ✅ Calculate date-based status
+        const dateBasedStatus = this.calculateDateBasedStatus(
+          checkInDate,
+          checkOutDate,
+          bookingData.bookingStatus
+        );
 
         return {
           id: bookingData.id,
@@ -1088,13 +1427,14 @@ export class BookingService {
             email: bookingData.user?.email || bookingData.customerEmail || 'N/A',
             mobileNo: bookingData.user?.mobileNo || bookingData.customerMobile || 'N/A',
           },
-          startDate: startDate.toISOString().split('T')[0],
-          endDate: endDate.toISOString().split('T')[0],
+          startDate: checkInDate.toISOString().split('T')[0],
+          endDate: checkOutDate.toISOString().split('T')[0],
           checkInTime: bookingData.bookingTimeFrom,
           checkOutTime: bookingData.bookingTimeTo,
           bookingHours: bookingData.bookingHours,
           numberOfPersons: bookingData.numberOfPersons,
           bookingType: bookingData.bookingType,
+          bookingStatus: dateBasedStatus, // ✅ Use date-based status
           paymentStatus: bookingData.paymentStatus,
           farmStatus: bookingData.farmStatus,
           originalPrice: parseFloat(bookingData.originalPrice?.toString() || '0'),
@@ -1102,12 +1442,12 @@ export class BookingService {
           finalPrice: parseFloat(bookingData.finalPrice?.toString() || '0'),
           isLoggedIn: bookingData.isLoggedIn || false,
           invoiceToken: bookingData.invoiceToken,
+          nextStatusCheckAt: bookingData.nextStatusCheckAt,
           createdAt: bookingData.createdAt,
           updatedAt: bookingData.updatedAt,
         };
       });
 
-      // Format farmhouse data
       const farmhouseData = farmhouse.toJSON();
 
       return new ApiResponse(false, 'Farm availability fetched successfully', {
@@ -1141,11 +1481,13 @@ export class BookingService {
     }
   }
 
-  // Get list of all farmhouses with booking status/bookingDate column
+  // Get farms with status
   async getFarmsWithStatus(date?: string, page: number = 1, limit: number = 0) {
     try {
+      // ✅ Auto-check status before fetching
+      await this.checkAndAutoUpdateStatus();
+
       const now = date ? new Date(date) : new Date();
-      // normalize now to full datetime
 
       const allFarms = await this.farmhouseModel.findAll({
         include: [
@@ -1167,7 +1509,6 @@ export class BookingService {
       for (const farm of allFarms) {
         const f = farm.toJSON();
 
-        // find bookings that are current or future (non-cancel)
         const bookings = await this.bookingModel.findAll({
           where: {
             farmhouseId: f.id,
@@ -1176,7 +1517,6 @@ export class BookingService {
           order: [['bookingDate', 'ASC']],
         });
 
-        // pick the booking that affects current or next availability
         let bookingStatus = 'Available';
         let bookingDateLabel = 'Available';
 
@@ -1186,12 +1526,10 @@ export class BookingService {
           const co = this.deriveCheckOutFromRecord(bd);
           const nextAvailable = this.calculateNextAvailableDate(co, bd.bookingType || 'REGULAR_12HR');
 
-          // If booking is in future or currently overlapping
           if (now < ci) {
-            // future booking -> show booked range
             bookingStatus = 'Available';
             bookingDateLabel = `${ci.toISOString()} - ${co.toISOString()}`;
-            break; // we show next booked range
+            break;
           }
 
           if (now >= ci && now < co) {
@@ -1201,7 +1539,6 @@ export class BookingService {
           }
 
           if (now >= nextAvailable) {
-            // this booking no longer affects availability; continue to next booking
             continue;
           }
         }
@@ -1231,10 +1568,11 @@ export class BookingService {
   // Get invoice by token
   async getInvoiceByToken(token: string) {
     try {
+      // ✅ Auto-check status before fetching
+      await this.checkAndAutoUpdateStatus();
+
       const booking = await this.bookingModel.findOne({
-        where: {
-          invoiceToken: token,
-        },
+        where: { invoiceToken: token },
         include: [
           {
             model: User,
@@ -1244,12 +1582,7 @@ export class BookingService {
           {
             model: Farmhouse,
             as: 'farmhouse',
-            include: [
-              {
-                model: Location,
-                as: 'location',
-              },
-            ],
+            include: [{ model: Location, as: 'location' }],
           },
         ],
       });
@@ -1259,8 +1592,14 @@ export class BookingService {
       }
 
       const bookingData: any = booking.toJSON();
+      const { checkInDate, checkOutDate } = this.getBookingDatesFromRecord(bookingData);
 
-      // Format invoice data
+      const dateBasedStatus = this.calculateDateBasedStatus(
+        checkInDate,
+        checkOutDate,
+        bookingData.bookingStatus
+      );
+
       const invoice = {
         invoiceToken: bookingData.invoiceToken,
         bookingId: bookingData.id,
@@ -1270,6 +1609,7 @@ export class BookingService {
         bookingHours: bookingData.bookingHours,
         numberOfPersons: bookingData.numberOfPersons,
         bookingType: bookingData.bookingType,
+        bookingStatus: dateBasedStatus, // ✅ Add booking status
         customer: {
           name: bookingData.user?.name || bookingData.customerName,
           email: bookingData.user?.email || bookingData.customerEmail,
@@ -1297,9 +1637,34 @@ export class BookingService {
     }
   }
 
-  // Get all bookings with filters (for admin)
+  private safeParseNumber(value: any, defaultValue: number = 0): number {
+    try {
+      if (value === null || value === undefined) {
+        return defaultValue;
+      }
+
+      if (typeof value === 'number') {
+        return value;
+      }
+
+      if (typeof value === 'string') {
+        const num = parseFloat(value);
+        return isNaN(num) ? defaultValue : num;
+      }
+
+      // Handle BigInt or other types
+      const num = Number(value);
+      return isNaN(num) ? defaultValue : num;
+    } catch {
+      return defaultValue;
+    }
+  }
+  // Find all bookings
   async findAll(queryDto: QueryBookingDto) {
     try {
+      // ✅ CRITICAL: Auto-check and update statuses before fetching
+      await this.checkAndAutoUpdateStatus();
+
       const {
         page = 1,
         limit = 10,
@@ -1309,6 +1674,7 @@ export class BookingService {
         dateFrom,
         dateTo,
         search,
+        bookingType
       } = queryDto;
 
       const offset = (page - 1) * limit;
@@ -1327,6 +1693,10 @@ export class BookingService {
         where.paymentStatus = paymentStatus;
       }
 
+      if (bookingType) {
+        where.bookingType = bookingType;
+      }
+
       if (dateFrom || dateTo) {
         where.bookingDate = {};
         if (dateFrom) {
@@ -1337,27 +1707,75 @@ export class BookingService {
         }
       }
 
-      // Handle search in a better way - use Op.or at the main query level
       if (search) {
-        where[Op.or] = [
-          // Search in user fields (using association)
-          { '$user.name$': { [Op.iLike]: `%${search}%` } },
-          { '$user.email$': { [Op.iLike]: `%${search}%` } },
-          { '$user.mobileNo$': { [Op.iLike]: `%${search}%` } },
-          // Search in farmhouse fields
-          { '$farmhouse.name$': { [Op.iLike]: `%${search}%` } },
-          { '$farmhouse.slug$': { [Op.iLike]: `%${search}%` } },
-          // Search in booking fields directly (for guest bookings)
-          { customerName: { [Op.iLike]: `%${search}%` } },
-          { customerEmail: { [Op.iLike]: `%${search}%` } },
-          { customerMobile: { [Op.iLike]: `%${search}%` } },
-          // Search by invoice token
-          { invoiceToken: { [Op.iLike]: `%${search}%` } },
-          // Search by booking ID (if search looks like a number)
-          ...(isNaN(Number(search)) ? [] : [
-            { id: Number(search) }
-          ]),
-        ];
+        const searchNum = this.safeParseNumber(search, -1);
+        if (searchNum > 0) {
+          where[Op.or] = [
+            { id: searchNum },
+            { '$user.id$': searchNum },
+            { '$farmhouse.id$': searchNum },
+            { customerName: { [Op.like]: `%${search}%` } },
+            { customerEmail: { [Op.like]: `%${search}%` } },
+            { customerMobile: { [Op.like]: `%${search}%` } },
+            { invoiceToken: { [Op.like]: `%${search}%` } },
+            // Search in partial payment amounts
+            Sequelize.where(
+              Sequelize.fn('CAST', Sequelize.col('partialPaidAmount')),
+              { [Op.like]: `%${search}%` }
+            ),
+            Sequelize.where(
+              Sequelize.fn('CAST', Sequelize.col('remainingAmount')),
+              { [Op.like]: `%${search}%` }
+            ),
+            Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('user.name')),
+              { [Op.like]: `%${search.toLowerCase()}%` }
+            ),
+            Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('user.email')),
+              { [Op.like]: `%${search.toLowerCase()}%` }
+            ),
+            Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('user.mobileNo')),
+              { [Op.like]: `%${search.toLowerCase()}%` }
+            ),
+            Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('farmhouse.name')),
+              { [Op.like]: `%${search.toLowerCase()}%` }
+            ),
+            Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('farmhouse.slug')),
+              { [Op.like]: `%${search.toLowerCase()}%` }
+            ),
+          ];
+        } else {
+          where[Op.or] = [
+            { customerName: { [Op.like]: `%${search}%` } },
+            { customerEmail: { [Op.like]: `%${search}%` } },
+            { customerMobile: { [Op.like]: `%${search}%` } },
+            { invoiceToken: { [Op.like]: `%${search}%` } },
+            Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('user.name')),
+              { [Op.like]: `%${search.toLowerCase()}%` }
+            ),
+            Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('user.email')),
+              { [Op.like]: `%${search.toLowerCase()}%` }
+            ),
+            Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('user.mobileNo')),
+              { [Op.like]: `%${search.toLowerCase()}%` }
+            ),
+            Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('farmhouse.name')),
+              { [Op.like]: `%${search.toLowerCase()}%` }
+            ),
+            Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('farmhouse.slug')),
+              { [Op.like]: `%${search.toLowerCase()}%` }
+            ),
+          ];
+        }
       }
 
       const includeConditions = [
@@ -1365,30 +1783,74 @@ export class BookingService {
           model: User,
           as: 'user',
           attributes: ['id', 'name', 'email', 'mobileNo'],
-          required: false, // Keep false to include bookings without users
+          required: false,
         },
         {
           model: Farmhouse,
           as: 'farmhouse',
-          attributes: ['id', 'name', 'slug', 'farmNo'],
-          required: true, // Farmhouse is required for all bookings
+          attributes: ['id', 'name', 'slug', 'farmNo', 'checkInFrom', 'checkOutTo'],
+          required: true,
         },
       ];
 
       const { count, rows } = await this.bookingModel.findAndCountAll({
         where,
         include: includeConditions,
-        order: [['bookingDate', 'DESC']],
+        order: [['createdAt', 'DESC']],
         limit,
         offset,
         distinct: true,
       });
 
-      // Format bookings with all requested details
-      const formattedBookings = rows.map((booking: any) => {
+      // ✅ Format bookings with payment details
+      const formattedBookings = rows.map((booking: Booking) => {
         const bookingData = booking.toJSON();
-        const startDate = new Date(bookingData.bookingDate);
-        const endDate = bookingData.bookingEndDate ? new Date(bookingData.bookingEndDate) : startDate;
+        const farmhouseData = bookingData.farmhouse;
+
+        // Get dates for status calculation
+        const { checkInDate, checkOutDate } = this.getBookingDatesFromRecord(bookingData);
+
+        // ✅ Calculate date-based status
+        const dateBasedStatus = this.calculateDateBasedStatus(
+          checkInDate,
+          checkOutDate,
+          bookingData.bookingStatus
+        );
+
+        // Calculate payment amounts using safe parser
+        const totalAmount = this.safeParseNumber(bookingData.finalPrice);
+        const paidAmount = this.safeParseNumber(bookingData.partialPaidAmount);
+        const remainingAmount = this.safeParseNumber(bookingData.remainingAmount, totalAmount);
+
+        // Calculate final remaining amount
+        const finalRemainingAmount = bookingData.remainingAmount !== undefined
+          ? remainingAmount
+          : Math.max(0, totalAmount - paidAmount);
+
+
+
+        // Create partial payment object if payment status is partial
+        let partialPayment: PartialPaymentResponse | null = null;
+        if (bookingData.paymentStatus === 'partial') {
+          partialPayment = {
+            paidAmount: paidAmount,
+            remainingAmount: finalRemainingAmount,
+            totalAmount: totalAmount,
+            notes: 'Partial payment details',
+          };
+
+          // Check if there are notes in bookingData or partialPaymentDetails
+          if (bookingData.bookingData?.partialPaymentDetails?.notes) {
+            partialPayment.notes = bookingData.bookingData.partialPaymentDetails.notes;
+          }
+        } else if (bookingData.paymentStatus === 'paid') {
+          partialPayment = {
+            paidAmount: totalAmount,
+            remainingAmount: 0,
+            totalAmount: totalAmount,
+            notes: 'Full payment received',
+          };
+        }
 
         return {
           id: bookingData.id,
@@ -1399,27 +1861,46 @@ export class BookingService {
             mobileNo: bookingData.user?.mobileNo || bookingData.customerMobile || 'N/A',
           },
           farmhouse: {
-            id: bookingData.farmhouse?.id,
-            name: bookingData.farmhouse?.name,
-            slug: bookingData.farmhouse?.slug,
-            farmNo: bookingData.farmhouse?.farmNo,
+            id: farmhouseData?.id,
+            name: farmhouseData?.name,
+            slug: farmhouseData?.slug,
+            farmNo: farmhouseData?.farmNo,
+            checkInFrom: farmhouseData?.checkInFrom || '10:00',
+            checkOutTo: farmhouseData?.checkOutTo || '22:00',
           },
-          startDate: startDate.toISOString().split('T')[0],
-          endDate: endDate.toISOString().split('T')[0],
+          startDate: checkInDate.toISOString().split('T')[0],
+          endDate: checkOutDate.toISOString().split('T')[0],
           checkInTime: bookingData.bookingTimeFrom,
           checkOutTime: bookingData.bookingTimeTo,
           numberOfPersons: bookingData.numberOfPersons,
-          paymentStatus: bookingData.paymentStatus,
-          discountAmount: parseFloat(bookingData.discountAmount?.toString() || '0'),
-          finalTotal: parseFloat(bookingData.finalPrice?.toString() || '0'),
-          originalPrice: parseFloat(bookingData.originalPrice?.toString() || '0'),
+          paymentStatus: bookingData.paymentStatus || 'incomplete',
+          bookingStatus: dateBasedStatus,
+          discountAmount: this.safeParseNumber(bookingData.discountAmount),
+          finalTotal: totalAmount,
+          originalPrice: this.safeParseNumber(bookingData.originalPrice),
           bookingHours: bookingData.bookingHours || this.calculateHoursFromBookingType(bookingData.bookingType),
-          bookingType: bookingData.bookingType,
+          bookingType: bookingData.bookingType || 'REGULAR_12HR',
           invoiceToken: bookingData.invoiceToken,
+          nextStatusCheckAt: bookingData.nextStatusCheckAt,
+          // Add payment details
+          paidAmount: paidAmount,
+          remainingAmount: finalRemainingAmount,
+          partialPayment: partialPayment,
           createdAt: bookingData.createdAt,
           updatedAt: bookingData.updatedAt,
         };
       });
+
+      // Calculate summary statistics
+      const totalRevenue = formattedBookings.reduce((sum, booking) => sum + booking.finalTotal, 0);
+      const totalPaid = formattedBookings.reduce((sum, booking) => sum + booking.paidAmount, 0);
+      const totalRemaining = formattedBookings.reduce((sum, booking) => sum + booking.remainingAmount, 0);
+
+      const paymentStatusBreakdown = formattedBookings.reduce((acc, booking) => {
+        const status = booking.paymentStatus || 'incomplete';
+        acc[status] = (acc[status] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
 
       return new ApiResponse(false, 'Bookings fetched successfully', {
         bookings: formattedBookings,
@@ -1427,13 +1908,20 @@ export class BookingService {
         page,
         limit,
         totalPages: Math.ceil(count / limit),
+        summary: {
+          totalBookings: count,
+          totalRevenue,
+          totalPaid,
+          totalRemaining,
+          paymentStatusBreakdown,
+        }
       });
     } catch (error) {
+      console.error('Error fetching bookings:', error);
       return new ApiResponse(true, 'Error fetching bookings', error.message);
     }
   }
-  
-  // Get farm statistics (for admin)
+  // Get farm statistics
   async getFarmStatistics(farmhouseId: number) {
     try {
       const farmhouse = await this.farmhouseModel.findByPk(farmhouseId);
@@ -1441,7 +1929,6 @@ export class BookingService {
         return new ApiResponse(true, 'Farmhouse not found', null);
       }
 
-      // Get all bookings for this farm
       const allBookings = await this.bookingModel.findAll({
         where: {
           farmhouseId,
@@ -1449,7 +1936,6 @@ export class BookingService {
         },
       });
 
-      // Calculate statistics
       const totalOrders = allBookings.length;
       const totalIncome = allBookings.reduce((sum, booking) => {
         return sum + parseFloat(booking.finalPrice.toString());
@@ -1475,6 +1961,7 @@ export class BookingService {
           discountAmount: b.discountAmount,
           finalPrice: b.finalPrice,
           paymentStatus: b.paymentStatus,
+          bookingStatus: (b as any).bookingStatus, // ✅ Add booking status
           isLoggedIn: b.isLoggedIn,
         })),
       });
@@ -1491,10 +1978,8 @@ export class BookingService {
         return new ApiResponse(true, 'Booking not found', null);
       }
 
-      // Prepare update data
       const updateData: any = { ...updateBookingDto };
 
-      // If price is being updated, recalculate discount
       if (updateBookingDto.originalPrice !== undefined) {
         const isLoggedIn = updateBookingDto.isLoggedIn ?? booking.isLoggedIn ?? false;
         const discountAmount = this.calculateDiscount(updateBookingDto.originalPrice, Boolean(isLoggedIn));
@@ -1505,6 +1990,9 @@ export class BookingService {
       }
 
       await booking.update(updateData);
+
+      // ✅ Auto-update status after update
+      await this.checkAndAutoUpdateStatus();
 
       const updatedBooking = await this.findById(id);
 
@@ -1524,7 +2012,6 @@ export class BookingService {
 
       await booking.destroy();
 
-      // Update most visited status after deletion
       await this.updateMostVisitedStatus(booking.farmhouseId);
 
       return new ApiResponse(false, 'Booking deleted successfully', null);
@@ -1532,29 +2019,50 @@ export class BookingService {
       return new ApiResponse(true, 'Error deleting booking', error.message);
     }
   }
-
-  // Update payment status
   async updatePaymentStatus(id: number, updatePaymentStatusDto: UpdatePaymentStatusDto) {
     try {
-      const { paymentStatus } = updatePaymentStatusDto;
+      const { paymentStatus, paidAmount, remainingAmount, notes } = updatePaymentStatusDto;
 
       const booking = await this.bookingModel.findByPk(id);
       if (!booking) {
         return new ApiResponse(true, 'Booking not found', null);
       }
 
-      // Get existing booking data
       const existingBookingData = booking.bookingData || {};
 
-      // Create payment history record
+      // Validate partial payment
+      if (paymentStatus === 'partial') {
+        if (!paidAmount || paidAmount <= 0) {
+          return new ApiResponse(true, 'For partial payment, paid amount is required', null);
+        }
+
+        if (paidAmount > booking.finalPrice) {
+          return new ApiResponse(true, 'Paid amount cannot exceed total price', null);
+        }
+
+        if (!remainingAmount || remainingAmount < 0) {
+          return new ApiResponse(true, 'Valid remaining amount is required for partial payment', null);
+        }
+      }
+
       const paymentHistory = existingBookingData.paymentHistory || [];
+
+      // Create partial payment object if partial status
+      const partialPaymentDetails = paymentStatus === 'partial' ? {
+        paidAmount,
+        remainingAmount,
+        notes,
+        updatedAt: new Date().toISOString()
+      } : null;
+
+      // Add to payment history
       paymentHistory.push({
         fromStatus: booking.paymentStatus,
         toStatus: paymentStatus,
+        partialDetails: partialPaymentDetails,
         updatedAt: new Date().toISOString(),
       });
 
-      // Prepare update data
       const updateData: any = {
         paymentStatus,
         bookingData: {
@@ -1564,35 +2072,130 @@ export class BookingService {
         },
       };
 
-      // If payment status is 'paid' and farm status is 'available', update farm status to 'unavailable'
-      if (paymentStatus === 'paid' && booking.farmStatus === 'available') {
-        updateData.farmStatus = 'unavailable';
+      // Store partial payment details separately if partial
+      if (paymentStatus === 'partial' && partialPaymentDetails) {
+        updateData.bookingData.partialPaymentDetails = partialPaymentDetails;
 
-        // Also ensure isLoggedIn is set correctly
+        // Update separate fields if they exist in your model
+        if (this.bookingModel.rawAttributes.partialPaidAmount) {
+          updateData.partialPaidAmount = paidAmount;
+        }
+        if (this.bookingModel.rawAttributes.remainingAmount) {
+          updateData.remainingAmount = remainingAmount;
+        }
+      }
+
+      // Update farm status based on payment status
+      if (paymentStatus === 'paid') {
+        updateData.farmStatus = 'unavailable';
         if (booking.userId) {
           updateData.isLoggedIn = true;
         }
       }
-
-      // If payment status is 'cancel', mark farm as available again
-      if (paymentStatus === 'cancel') {
+      else if (paymentStatus === 'partial') {
+        updateData.farmStatus = 'unavailable'; // Farm is still booked for partial payment
+        if (booking.userId) {
+          updateData.isLoggedIn = true;
+        }
+      }
+      else if (paymentStatus === 'cancel') {
         updateData.farmStatus = 'available';
       }
 
       await booking.update(updateData);
 
-      // Get updated booking with relations
+      // ✅ Auto-update status after payment update
+      await this.checkAndAutoUpdateStatus();
+
       const updatedBooking = await this.findById(id);
 
-      return new ApiResponse(false, 'Payment status updated successfully', {
+      // Prepare response with payment details
+      const responseData = {
         ...updatedBooking.data,
         previousStatus: booking.paymentStatus,
         newStatus: paymentStatus,
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      // Add partial payment details to response if applicable
+      if (paymentStatus === 'partial' && partialPaymentDetails) {
+        responseData.partialPayment = {
+          paidAmount: partialPaymentDetails.paidAmount,
+          remainingAmount: partialPaymentDetails.remainingAmount,
+          totalAmount: parseFloat(booking.finalPrice.toString()),
+          notes: partialPaymentDetails.notes || ''
+        };
+      }
+
+      return new ApiResponse(
+        false,
+        `Payment status updated to ${paymentStatus}${paymentStatus === 'partial' ? ` (₹${paidAmount} paid)` : ''}`,
+        responseData
+      );
     } catch (error) {
       return new ApiResponse(true, 'Error updating payment status', error.message);
     }
   }
-}
 
+  // =================== ADMIN METHODS (Optional) ===================
+
+  /**
+   * Manual trigger for cron job (Admin only)
+   */
+  async triggerAutoUpdate(): Promise<ApiResponse<any>> {
+    try {
+      await this.bookingCronService.autoUpdateBookingStatus();
+      return new ApiResponse(false, 'Auto update triggered successfully', {
+        timestamp: new Date().toISOString(),
+        message: 'Cron job executed successfully'
+      });
+    } catch (error) {
+      return new ApiResponse(true, 'Error triggering auto update', error.message);
+    }
+  }
+
+  /**
+   * Get system status (for monitoring)
+   */
+  async getSystemStatus(): Promise<ApiResponse<any>> {
+    try {
+      const now = new Date();
+      const totalBookings = await this.bookingModel.count();
+
+      const upcomingBookings = await this.bookingModel.count({
+        where: { bookingStatus: 'upcoming' }
+      });
+
+      const currentBookings = await this.bookingModel.count({
+        where: { bookingStatus: 'current' }
+      });
+
+      const expiredBookings = await this.bookingModel.count({
+        where: { bookingStatus: 'expired' }
+      });
+
+      const bookingsToUpdate = await this.bookingModel.count({
+        where: {
+          nextStatusCheckAt: {
+            [Op.lte]: now,
+            [Op.ne]: null
+          },
+          bookingStatus: { [Op.in]: ['upcoming', 'current'] }
+        }
+      });
+
+      return new ApiResponse(false, 'System status fetched', {
+        timestamp: now.toISOString(),
+        totalBookings,
+        upcomingBookings,
+        currentBookings,
+        expiredBookings,
+        bookingsToUpdate,
+        nextAutoUpdate: new Date(now.getTime() + 5 * 60 * 1000), // Next 5 minutes
+        systemStatus: 'healthy'
+      });
+    } catch (error) {
+      return new ApiResponse(true, 'Error fetching system status', error.message);
+    }
+  }
+}

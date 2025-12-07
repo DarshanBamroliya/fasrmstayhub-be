@@ -1,108 +1,125 @@
-import { IsInt, IsString, IsEnum, IsDateString, IsOptional, IsBoolean, IsNumber, Min } from 'class-validator';
+import { 
+  IsInt, IsString, IsEnum, IsDateString, IsOptional, 
+  IsBoolean, IsNumber, Min 
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
+export enum BookingTypeEnum {
+  REGULAR_12HR = 'REGULAR_12HR',
+  REGULAR_24HR = 'REGULAR_24HR',
+  WEEKEND_12HR = 'WEEKEND_12HR',
+  WEEKEND_24HR = 'WEEKEND_24HR'
+}
+
+export enum PaymentStatusEnum {
+  PAID = 'paid',
+  PARTIAL = 'partial',
+  INCOMPLETE = 'incomplete',
+  CANCEL = 'cancel',
+}
+
+export enum FarmStatusEnum {
+  AVAILABLE = 'available',
+  UNAVAILABLE = 'unavailable',
+}
+
 export class CreateBookingDto {
-  @ApiProperty({ description: 'Farmhouse ID', example: 1 })
+  @ApiProperty()
   @IsInt()
   farmhouseId: number;
 
-  @ApiPropertyOptional({ description: 'User ID (if logged in)', example: 1 })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsInt()
   userId?: number;
 
-  @ApiPropertyOptional({ description: 'Customer name (required if not logged in)', example: 'John Doe' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   customerName?: string;
 
-  @ApiPropertyOptional({ description: 'Customer mobile (required if user not exists - at least one of mobile/email)', example: '+1234567890' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   customerMobile?: string;
 
-  @ApiPropertyOptional({ description: 'Customer email (required if user not exists - at least one of mobile/email)', example: 'john@example.com' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   customerEmail?: string;
 
-  @ApiProperty({ description: 'Booking start date (check-in date)', example: '2024-12-25' })
+  @ApiProperty()
   @IsDateString()
   bookingDate: string;
 
-  @ApiPropertyOptional({ description: 'Booking end date (check-out date) - will be calculated automatically', example: '2024-12-26' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsDateString()
   bookingEndDate?: string;
 
-  @ApiProperty({ description: 'Booking time from (start time)', example: '10:00' })
+  @ApiProperty()
   @IsString()
   bookingTimeFrom: string;
 
-  @ApiPropertyOptional({ description: 'Booking time to (end time) - will be calculated automatically if not provided', example: '22:00' })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   bookingTimeTo?: string;
 
-  @ApiProperty({ description: 'Number of persons', example: 5 })
+  @ApiProperty()
   @IsInt()
   @Min(1)
   numberOfPersons: number;
 
-  @ApiProperty({ 
-    enum: ['REGULAR_12HR', 'REGULAR_24HR', 'WEEKEND_12HR', 'WEEKEND_24HR'],
-    description: 'Booking type',
-    example: 'REGULAR_12HR'
-  })
-  @IsEnum(['REGULAR_12HR', 'REGULAR_24HR', 'WEEKEND_12HR', 'WEEKEND_24HR'])
-  bookingType: 'REGULAR_12HR' | 'REGULAR_24HR' | 'WEEKEND_12HR' | 'WEEKEND_24HR';
+  @ApiProperty({ enum: BookingTypeEnum })
+  @IsEnum(BookingTypeEnum)
+  bookingType: BookingTypeEnum;
 
-  @ApiProperty({ description: 'Original price', example: 2000 })
+  @ApiProperty()
   @IsNumber()
   @Min(0)
   originalPrice: number;
 
-  @ApiPropertyOptional({ description: 'Discount amount (calculated automatically)', example: 100 })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
   @Min(0)
   discountAmount?: number;
 
-  @ApiPropertyOptional({ description: 'Final price after discount (calculated automatically)', example: 1900 })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
   @Min(0)
   finalPrice?: number;
 
-  @ApiPropertyOptional({ description: 'Whether user is logged in', default: false })
+  @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()
   isLoggedIn?: boolean;
 
-  @ApiPropertyOptional({ 
-    enum: ['paid', 'partial', 'incomplete', 'cancel'],
-    default: 'incomplete',
-    description: 'Payment status'
-  })
+  @ApiPropertyOptional({ enum: PaymentStatusEnum })
   @IsOptional()
-  @IsEnum(['paid', 'partial', 'incomplete', 'cancel'])
-  paymentStatus?: 'paid' | 'partial' | 'incomplete' | 'cancel';
+  @IsEnum(PaymentStatusEnum)
+  paymentStatus?: PaymentStatusEnum;
 
-  @ApiPropertyOptional({ 
-    enum: ['available', 'unavailable'],
-    default: 'available',
-    description: 'Farm status'
-  })
+  @ApiPropertyOptional()
   @IsOptional()
-  @IsEnum(['available', 'unavailable'])
-  farmStatus?: 'available' | 'unavailable';
+  @IsNumber()
+  @Min(0)
+  paidAmount?: number;
 
-  @ApiPropertyOptional({ 
-    description: 'Additional booking data for invoice', 
-    type: 'object',
-    additionalProperties: true,
-  })
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  remainingAmount?: number;
+
+  @ApiPropertyOptional({ enum: FarmStatusEnum })
+  @IsOptional()
+  @IsEnum(FarmStatusEnum)
+  farmStatus?: FarmStatusEnum;
+
+  @ApiPropertyOptional()
   @IsOptional()
   bookingData?: any;
 }
-
