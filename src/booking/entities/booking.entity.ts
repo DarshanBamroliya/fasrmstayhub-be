@@ -346,15 +346,25 @@ export class Booking extends Model<Booking> {
   }
 
   @AfterFind
-  static async checkAndUpdateStatus(instances: Booking | Booking[]) {
+  static async checkAndUpdateStatus(instances: Booking | Booking[] | null) {
+    if (!instances) return;
+
+    // If raw query, skip
+    if ((instances as any).length === 0) return;
+
     if (Array.isArray(instances)) {
       for (const instance of instances) {
-        await instance.checkAndUpdateIfNeeded();
+        if (instance instanceof Booking) {
+          await instance.checkAndUpdateIfNeeded();
+        }
       }
-    } else if (instances) {
-      await instances.checkAndUpdateIfNeeded();
+    } else {
+      if (instances instanceof Booking) {
+        await instances.checkAndUpdateIfNeeded();
+      }
     }
   }
+
 
   /**
    * Check if status needs update and update if needed
