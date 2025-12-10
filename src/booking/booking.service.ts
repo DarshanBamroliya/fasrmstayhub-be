@@ -1398,8 +1398,9 @@ export class BookingService {
         attributes: [
           'id', 'userId', 'customerName', 'customerMobile', 'customerEmail',
           'bookingDate', 'bookingEndDate', 'bookingTimeFrom', 'bookingTimeTo',
-          'bookingHours', 'numberOfPersons', 'bookingType', 'originalPrice',
-          'discountAmount', 'finalPrice', 'paymentStatus', 'farmStatus',
+          'bookingHours', 'numberOfPersons', 'bookingType',
+          'partialPaidAmount', 'remainingAmount', 'bookingData',
+          'originalPrice', 'discountAmount', 'finalPrice', 'paymentStatus', 'farmStatus',
           'isLoggedIn', 'invoiceToken', 'bookingStatus', 'nextStatusCheckAt', // ✅ Add new fields
           'createdAt', 'updatedAt',
         ],
@@ -1419,6 +1420,31 @@ export class BookingService {
           bookingData.bookingStatus
         );
 
+        // Payment breakdown
+        const totalAmount = this.safeParseNumber(bookingData.finalPrice);
+        const paidAmount = this.safeParseNumber(bookingData.partialPaidAmount);
+        const remainingAmountRaw = this.safeParseNumber(bookingData.remainingAmount, totalAmount);
+        const finalRemainingAmount = bookingData.remainingAmount !== undefined
+          ? remainingAmountRaw
+          : Math.max(0, totalAmount - paidAmount);
+
+        let partialPayment: PartialPaymentResponse | null = null;
+        if (bookingData.paymentStatus === 'partial') {
+          partialPayment = {
+            paidAmount,
+            remainingAmount: finalRemainingAmount,
+            totalAmount,
+            notes: bookingData.bookingData?.partialPaymentDetails?.notes || '',
+          };
+        } else if (bookingData.paymentStatus === 'paid') {
+          partialPayment = {
+            paidAmount: totalAmount,
+            remainingAmount: 0,
+            totalAmount,
+            notes: 'Full payment received',
+          };
+        }
+
         return {
           id: bookingData.id,
           user: {
@@ -1437,6 +1463,9 @@ export class BookingService {
           bookingStatus: dateBasedStatus, // ✅ Use date-based status
           paymentStatus: bookingData.paymentStatus,
           farmStatus: bookingData.farmStatus,
+          paidAmount,
+          remainingAmount: finalRemainingAmount,
+          partialPayment,
           originalPrice: parseFloat(bookingData.originalPrice?.toString() || '0'),
           discountAmount: parseFloat(bookingData.discountAmount?.toString() || '0'),
           finalPrice: parseFloat(bookingData.finalPrice?.toString() || '0'),
