@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
-import { Settings } from './entities/settings.entity';
-import { UpdateSettingsDto } from './dto/update-settings.dto';
+import { SettingsImage, ImageType } from './entities/settings-image.entity';
 import { ApiResponse } from 'src/common/responses/api-response';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -9,93 +8,192 @@ import * as fs from 'fs';
 @Injectable()
 export class SettingsService {
   constructor(
-    @InjectModel(Settings) private readonly settingsModel: typeof Settings,
-  ) {}
+    @InjectModel(SettingsImage) private readonly settingsImageModel: typeof SettingsImage,
+  ) { }
 
-  async getSettings() {
+  // ============================================
+  // GET APIs - Public
+  // ============================================
+
+  async getLogo() {
     try {
-      // Get the first settings record, or create default if none exists
-      let settings = await this.settingsModel.findOne();
+      const logo = await this.settingsImageModel.findOne({
+        where: { imageType: ImageType.LOGO },
+        order: [['createdAt', 'DESC']], // Get latest if multiple exist
+      });
 
-      if (!settings) {
-        // Create default settings
-        settings = await this.settingsModel.create({
-          heroSliders: [],
-          appLogoLight: null,
-          appLogoDark: null,
-          loginDialogImage: null,
-        } as any);
-      }
-
-      const settingsData: any = settings.toJSON();
-      
-      // Transform file paths to full URLs
-      const heroSliders = (settingsData.heroSliders || []).map((file: string) => 
-        file ? `uploads/static-images/${file}` : null
-      ).filter((file: string | null) => file !== null);
-
-      const appLogoLight = settingsData.appLogoLight 
-        ? `uploads/static-images/${settingsData.appLogoLight}` 
-        : null;
-      
-      const appLogoDark = settingsData.appLogoDark 
-        ? `uploads/static-images/${settingsData.appLogoDark}` 
-        : null;
-
-      const loginDialogImage = settingsData.loginDialogImage 
-        ? `uploads/static-images/${settingsData.loginDialogImage}` 
-        : null;
-
-      return new ApiResponse(false, 'Settings fetched successfully', {
-        id: settingsData.id,
-        heroSliders,
-        appLogoLight,
-        appLogoDark,
-        loginDialogImage,
-        createdAt: settingsData.createdAt,
-        updatedAt: settingsData.updatedAt,
+      return new ApiResponse(false, 'Logo fetched successfully', {
+        logo: logo
+          ? {
+            id: logo.id,
+            imagePath: logo.imagePath,
+            url: `uploads/static-images/${logo.imagePath}`,
+          }
+          : null,
       });
     } catch (error) {
-      return new ApiResponse(true, 'Error fetching settings', error.message);
+      return new ApiResponse(true, 'Error fetching logo', error.message);
     }
   }
 
-  async updateSettings(updateSettingsDto: UpdateSettingsDto) {
+  async getLoginImage() {
     try {
-      // Get the first settings record, or create if none exists
-      let settings = await this.settingsModel.findOne();
+      const loginImage = await this.settingsImageModel.findOne({
+        where: { imageType: ImageType.LOGIN_DIALOG },
+        order: [['createdAt', 'DESC']], // Get latest if multiple exist
+      });
 
-      if (!settings) {
-        settings = await this.settingsModel.create({
-          heroSliders: updateSettingsDto.heroSliders || [],
-          appLogoLight: updateSettingsDto.appLogoLight || null,
-          appLogoDark: updateSettingsDto.appLogoDark || null,
-        } as any);
-      } else {
-        // Update existing settings
-        const updateData: any = {};
-        
-        if (updateSettingsDto.heroSliders !== undefined) {
-          updateData.heroSliders = updateSettingsDto.heroSliders;
-        }
-        
-        if (updateSettingsDto.appLogoLight !== undefined) {
-          updateData.appLogoLight = updateSettingsDto.appLogoLight;
-        }
-        
-        if (updateSettingsDto.appLogoDark !== undefined) {
-          updateData.appLogoDark = updateSettingsDto.appLogoDark;
-        }
+      return new ApiResponse(false, 'Login image fetched successfully', {
+        image: loginImage
+          ? {
+            id: loginImage.id,
+            imagePath: loginImage.imagePath,
+            url: `uploads/static-images/${loginImage.imagePath}`,
+          }
+          : null,
+      });
+    } catch (error) {
+      return new ApiResponse(true, 'Error fetching login image', error.message);
+    }
+  }
 
-        await settings.update(updateData);
+  async getHeroSliders() {
+    try {
+      const heroSliders = await this.settingsImageModel.findAll({
+        where: { imageType: ImageType.HERO_SLIDER },
+        order: [['createdAt', 'ASC']],
+      });
+
+      return new ApiResponse(false, 'Hero sliders fetched successfully', {
+        sliders: heroSliders.map((img: any) => ({
+          id: img.id,
+          imagePath: img.imagePath,
+          url: `uploads/static-images/${img.imagePath}`,
+        })),
+        total: heroSliders.length,
+      });
+    } catch (error) {
+      return new ApiResponse(true, 'Error fetching hero sliders', error.message);
+    }
+  }
+
+  // ============================================
+  // POST APIs - Admin Only
+  // ============================================
+
+  async uploadLogo(
+    file: {
+      fieldname: string;
+      originalname: string;
+      encoding: string;
+      mimetype: string;
+      buffer: Buffer;
+      size: number;
+    }
+  ) {
+    try {
+      if (!file) {
+        return new ApiResponse(true, 'No file provided', null);
       }
 
-      // Fetch updated settings
-      const updatedSettings = await this.settingsModel.findOne();
+      const uploadDir = path.join(process.cwd(), 'uploads', 'static-images');
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
 
-      return new ApiResponse(false, 'Settings updated successfully', updatedSettings);
+      const timestamp = Date.now();
+      const ext = path.extname(file.originalname).toLowerCase();
+      const filename = `logo-${timestamp}${ext}`;
+      const filePath = path.join(uploadDir, filename);
+
+      // Save file to disk
+      fs.writeFileSync(filePath, file.buffer);
+
+      // Delete old logo if exists (replace behavior)
+      const oldLogo = await this.settingsImageModel.findOne({
+        where: { imageType: ImageType.LOGO },
+        order: [['createdAt', 'DESC']],
+      });
+
+      if (oldLogo) {
+        const oldFilePath = path.join(uploadDir, oldLogo.imagePath);
+        if (fs.existsSync(oldFilePath)) {
+          fs.unlinkSync(oldFilePath);
+        }
+        await oldLogo.destroy();
+      }
+
+      // Create new logo record
+      const newLogo = await this.settingsImageModel.create({
+        imageType: ImageType.LOGO,
+        imagePath: filename,
+      } as any);
+
+      return new ApiResponse(false, 'Logo uploaded successfully', {
+        id: newLogo.id,
+        imagePath: filename,
+        url: `uploads/static-images/${filename}`,
+      });
     } catch (error) {
-      return new ApiResponse(true, 'Error updating settings', error.message);
+      return new ApiResponse(true, 'Error uploading logo', error.message);
+    }
+  }
+
+  async uploadLoginImage(
+    file: {
+      fieldname: string;
+      originalname: string;
+      encoding: string;
+      mimetype: string;
+      buffer: Buffer;
+      size: number;
+    }
+  ) {
+    try {
+      if (!file) {
+        return new ApiResponse(true, 'No file provided', null);
+      }
+
+      const uploadDir = path.join(process.cwd(), 'uploads', 'static-images');
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+
+      const timestamp = Date.now();
+      const ext = path.extname(file.originalname).toLowerCase();
+      const filename = `login-dialog-${timestamp}${ext}`;
+      const filePath = path.join(uploadDir, filename);
+
+      // Save file to disk
+      fs.writeFileSync(filePath, file.buffer);
+
+      // Delete old login image if exists (replace behavior)
+      const oldLoginImage = await this.settingsImageModel.findOne({
+        where: { imageType: ImageType.LOGIN_DIALOG },
+        order: [['createdAt', 'DESC']],
+      });
+
+      if (oldLoginImage) {
+        const oldFilePath = path.join(uploadDir, oldLoginImage.imagePath);
+        if (fs.existsSync(oldFilePath)) {
+          fs.unlinkSync(oldFilePath);
+        }
+        await oldLoginImage.destroy();
+      }
+
+      // Create new login image record
+      const newLoginImage = await this.settingsImageModel.create({
+        imageType: ImageType.LOGIN_DIALOG,
+        imagePath: filename,
+      } as any);
+
+      return new ApiResponse(false, 'Login dialog image uploaded successfully', {
+        id: newLoginImage.id,
+        imagePath: filename,
+        url: `uploads/static-images/${filename}`,
+      });
+    } catch (error) {
+      return new ApiResponse(true, 'Error uploading login dialog image', error.message);
     }
   }
 
@@ -110,218 +208,86 @@ export class SettingsService {
     }>
   ) {
     try {
+      if (!files || files.length === 0) {
+        return new ApiResponse(true, 'No files provided', null);
+      }
+
       const uploadDir = path.join(process.cwd(), 'uploads', 'static-images');
       if (!fs.existsSync(uploadDir)) {
         fs.mkdirSync(uploadDir, { recursive: true });
       }
 
-      const uploadedFiles: string[] = [];
+      const uploadedFiles: Array<{ id: number; imagePath: string; url: string }> = [];
 
-      for (const file of files) {
-        const timestamp = Date.now();
-        // Determine if it's a video or image
-        const isVideo = file.mimetype.match(/\/(mp4|mov|avi|wmv|flv|webm|mkv)$/);
-        const prefix = isVideo ? 'hero-slider-video' : 'hero-slider-image';
-        const filename = `${prefix}-${timestamp}-${file.originalname}`;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        // Add small delay to ensure unique timestamps for simultaneous uploads
+        // Same approach as product images - use timestamp only
+        const timestamp = Date.now() + i; // Add index to ensure uniqueness
+        const ext = path.extname(file.originalname).toLowerCase();
+        // Use same format as product images: just timestamp + extension
+        const filename = `${timestamp}${ext}`;
         const filePath = path.join(uploadDir, filename);
 
         // Save file to disk
         fs.writeFileSync(filePath, file.buffer);
 
-        uploadedFiles.push(filename);
-      }
-
-      // Get current settings
-      let settings = await this.settingsModel.findOne();
-      const currentSliders: string[] = settings?.heroSliders ? (settings.heroSliders as string[]) : [];
-
-      // Add new files to existing sliders
-      const updatedSliders = [...currentSliders, ...uploadedFiles];
-
-      if (!settings) {
-        settings = await this.settingsModel.create({
-          heroSliders: updatedSliders,
-          appLogoLight: null,
-          appLogoDark: null,
+        // Create image record (add behavior - no replace)
+        const image = await this.settingsImageModel.create({
+          imageType: ImageType.HERO_SLIDER,
+          imagePath: filename,
         } as any);
-      } else {
-        await settings.update({ heroSliders: updatedSliders } as any);
+
+        uploadedFiles.push({
+          id: image.id,
+          imagePath: filename,
+          url: `uploads/static-images/${filename}`,
+        });
       }
 
       return new ApiResponse(false, 'Hero slider files uploaded successfully', {
-        uploadedFiles: uploadedFiles.map(f => `uploads/static-images/${f}`),
-        totalSliders: updatedSliders.length,
+        uploadedFiles,
+        totalUploaded: uploadedFiles.length,
       });
     } catch (error) {
       return new ApiResponse(true, 'Error uploading hero slider images', error.message);
     }
   }
 
-  async uploadLogo(
-    file: {
-      fieldname: string;
-      originalname: string;
-      encoding: string;
-      mimetype: string;
-      buffer: Buffer;
-      size: number;
-    },
-    mode: 'light' | 'dark'
-  ) {
+  // ============================================
+  // DELETE APIs - Admin Only
+  // ============================================
+
+  async deleteHeroSlider(id: number) {
     try {
-      if (!file) {
-        return new ApiResponse(true, 'No file provided', null);
-      }
-
-      if (!mode || (mode !== 'light' && mode !== 'dark')) {
-        return new ApiResponse(true, 'Invalid mode. Must be "light" or "dark"', null);
-      }
-
-      const uploadDir = path.join(process.cwd(), 'uploads', 'static-images');
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-
-      const timestamp = Date.now();
-      const filename = `logo-${mode}-${timestamp}-${file.originalname}`;
-      const filePath = path.join(uploadDir, filename);
-
-      // Save file to disk
-      fs.writeFileSync(filePath, file.buffer);
-
-      // Get current settings
-      let settings = await this.settingsModel.findOne();
-
-      if (!settings) {
-        settings = await this.settingsModel.create({
-          heroSliders: [],
-          appLogoLight: mode === 'light' ? filename : null,
-          appLogoDark: mode === 'dark' ? filename : null,
-        } as any);
-      } else {
-        const updateData: any = {};
-        if (mode === 'light') {
-          // Delete old light logo if exists
-          if (settings.appLogoLight) {
-            const oldLogoPath = path.join(uploadDir, settings.appLogoLight as string);
-            if (fs.existsSync(oldLogoPath)) {
-              fs.unlinkSync(oldLogoPath);
-            }
-          }
-          updateData.appLogoLight = filename;
-        } else {
-          // Delete old dark logo if exists
-          if (settings.appLogoDark) {
-            const oldLogoPath = path.join(uploadDir, settings.appLogoDark as string);
-            if (fs.existsSync(oldLogoPath)) {
-              fs.unlinkSync(oldLogoPath);
-            }
-          }
-          updateData.appLogoDark = filename;
-        }
-        await settings.update(updateData);
-      }
-
-      return new ApiResponse(false, 'Logo uploaded successfully', {
-        mode,
-        logoUrl: `uploads/static-images/${filename}`,
+      const image = await this.settingsImageModel.findOne({
+        where: {
+          id,
+          imageType: ImageType.HERO_SLIDER,
+        },
       });
-    } catch (error) {
-      return new ApiResponse(true, 'Error uploading logo', error.message);
-    }
-  }
 
-  async deleteHeroSlider(imageName: string) {
-    try {
-      // Get current settings
-      const settings = await this.settingsModel.findOne();
-      
-      if (!settings) {
-        return new ApiResponse(true, 'Settings not found', null);
+      if (!image) {
+        return new ApiResponse(true, 'Hero slider not found', null);
       }
-
-      const currentSliders: string[] = settings.heroSliders ? (settings.heroSliders as string[]) : [];
-      
-      // Check if image exists in sliders
-      if (!currentSliders.includes(imageName)) {
-        return new ApiResponse(true, 'Image not found in hero sliders', null);
-      }
-
-      // Remove from array
-      const updatedSliders = currentSliders.filter(img => img !== imageName);
-      await settings.update({ heroSliders: updatedSliders } as any);
 
       // Delete file from disk
       const uploadDir = path.join(process.cwd(), 'uploads', 'static-images');
-      const filePath = path.join(uploadDir, imageName);
-      
+      const filePath = path.join(uploadDir, image.imagePath);
+
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
       }
 
-      return new ApiResponse(false, 'Hero slider file deleted successfully', {
-        deletedFile: imageName,
-        remainingSliders: updatedSliders.length,
+      // Delete from database
+      await image.destroy();
+
+      return new ApiResponse(false, 'Hero slider deleted successfully', {
+        deletedId: id,
+        deletedFile: image.imagePath,
       });
     } catch (error) {
-      return new ApiResponse(true, 'Error deleting hero slider file', error.message);
-    }
-  }
-
-  async uploadLoginDialogImage(
-    file: {
-      fieldname: string;
-      originalname: string;
-      encoding: string;
-      mimetype: string;
-      buffer: Buffer;
-      size: number;
-    }
-  ) {
-    try {
-      if (!file) {
-        return new ApiResponse(true, 'No file provided', null);
-      }
-
-      const uploadDir = path.join(process.cwd(), 'uploads', 'static-images');
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-
-      const timestamp = Date.now();
-      const filename = `login-dialog-${timestamp}-${file.originalname}`;
-      const filePath = path.join(uploadDir, filename);
-
-      // Save file to disk
-      fs.writeFileSync(filePath, file.buffer);
-
-      // Get current settings
-      let settings = await this.settingsModel.findOne();
-
-      if (!settings) {
-        settings = await this.settingsModel.create({
-          heroSliders: [],
-          appLogoLight: null,
-          appLogoDark: null,
-          loginDialogImage: filename,
-        } as any);
-      } else {
-        // Delete old login dialog image if exists
-        if (settings.loginDialogImage) {
-          const oldImagePath = path.join(uploadDir, settings.loginDialogImage as string);
-          if (fs.existsSync(oldImagePath)) {
-            fs.unlinkSync(oldImagePath);
-          }
-        }
-        await settings.update({ loginDialogImage: filename } as any);
-      }
-
-      return new ApiResponse(false, 'Login dialog image uploaded successfully', {
-        imageUrl: `uploads/static-images/${filename}`,
-      });
-    } catch (error) {
-      return new ApiResponse(true, 'Error uploading login dialog image', error.message);
+      return new ApiResponse(true, 'Error deleting hero slider', error.message);
     }
   }
 }
-

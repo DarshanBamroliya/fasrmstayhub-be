@@ -3,6 +3,7 @@ import {
   IsBoolean, IsNumber, Min 
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 
 export enum BookingTypeEnum {
   REGULAR_12HR = 'REGULAR_12HR',
@@ -25,11 +26,13 @@ export enum FarmStatusEnum {
 
 export class CreateBookingDto {
   @ApiProperty()
+  @Type(() => Number)
   @IsInt()
   farmhouseId: number;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   userId?: number;
 
@@ -67,6 +70,7 @@ export class CreateBookingDto {
   bookingTimeTo?: string;
 
   @ApiProperty()
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   numberOfPersons: number;
@@ -76,18 +80,21 @@ export class CreateBookingDto {
   bookingType: BookingTypeEnum;
 
   @ApiProperty()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   originalPrice: number;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   discountAmount?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   finalPrice?: number;
@@ -104,12 +111,14 @@ export class CreateBookingDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   paidAmount?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   remainingAmount?: number;

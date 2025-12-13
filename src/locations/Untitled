@@ -1,0 +1,13 @@
+[Nest] 24800  - 12/12/2025, 8:57:09 pm   ERROR [HttpExceptionFilter] POST /api/farmhouse - 400 - Bad Request Exception
+Validation Errors: [
+  "maxPersons must not be less than 1",
+  "bedrooms must not be less than 1"
+]
+BadRequestException: Bad Request Exception
+    at ValidationPipe.exceptionFactory (D:\Farmstay Hub - smit donda\fasrmstayhub-be\node_modules\@nestjs\common\pipes\validation.pipe.js:107:20)
+    at ValidationPipe.transform (D:\Farmstay Hub - smit donda\fasrmstayhub-be\node_modules\@nestjs\common\pipes\validation.pipe.js:74:30)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async resolveParamValue (D:\Farmstay Hub - smit donda\fasrmstayhub-be\node_modules\@nestjs\core\router\router-execution-context.js:148:23)
+    at async Promise.all (index 0)
+    at async pipesFn (D:\Farmstay Hub - smit donda\fasrmstayhub-be\node_modules\@nestjs\core\router\router-execution-context.js:151:13)
+    at async D:\Farmstay Hub - smit donda\fasrmstayhub-be\node_modules\@nestjs\core\router\router-execution-context.js:37:30      

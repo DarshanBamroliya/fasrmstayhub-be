@@ -19,15 +19,16 @@ import { User } from '../users/entities/user.entity';
         database: configService.get<string>('DB_NAME'),
         models: [User],
         autoLoadModels: true,
-        // Note: Sequelize doesn't have 'synchronize' option like TypeORM
-        // Use sync() method or migrations instead
         logging: false,
+        dialectOptions: {
+          connectTimeout: 20000, // 20 seconds
+        },
       }),
     }),
   ],
 })
 export class DatabaseModule implements OnModuleInit {
-  constructor(@InjectConnection() private sequelize: Sequelize) {}
+  constructor(@InjectConnection() private sequelize: Sequelize) { }
 
   async onModuleInit() {
     // Sync database schema on startup (alter: true adds missing columns without dropping data)

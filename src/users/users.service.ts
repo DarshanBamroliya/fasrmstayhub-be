@@ -465,6 +465,9 @@ export class UsersService {
       if (email) payload.email = email;
       if (mobile) payload.mobileNo = mobile;
       if (createdBy) payload.createdBy = createdBy;
+      
+      // Set loginType to 'admin' when created by admin
+      payload.loginType = 'admin';
 
       const user = await this.userModel.create(payload as any);
 
@@ -473,6 +476,7 @@ export class UsersService {
         name: user.name,
         email: user.email || null,
         mobile: user.mobileNo || null,
+        loginType: user.loginType,
       };
 
       return new ApiResponse(false, 'User created successfully', safeUser);

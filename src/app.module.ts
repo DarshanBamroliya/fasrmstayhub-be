@@ -11,6 +11,8 @@ import { ProductsModule } from './products/products.module';
 import { StaticPageModule } from './Staticpage/Staticpage.module';
 import { SettingsModule } from './settings/settings.module';
 import { BookingModule } from './booking/booking.module';
+import { LocationsModule } from './locations/locations.module';
+
 
 @Module({
   imports: [
@@ -22,7 +24,8 @@ import { BookingModule } from './booking/booking.module';
     ProductsModule,
     StaticPageModule,
     SettingsModule,
-    BookingModule
+    BookingModule,
+    LocationsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

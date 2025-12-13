@@ -99,160 +99,161 @@ export class ProductsService {
 
 
   // Get All Farmhouses for Admin - Shows all farms regardless of status
- async findAllForAdmin(queryDto: QueryFarmhouseDto) {
-  try {
-    const {
-      search,
-      priority,
-      page = 1,
-      limit = 10,
-    } = queryDto;
+  async findAllForAdmin(queryDto: QueryFarmhouseDto) {
+    try {
+      const {
+        search,
+        priority,
+        page = 1,
+        limit = 10,
+      } = queryDto;
 
-    const offset = (page - 1) * limit;
+      const offset = (page - 1) * limit;
 
-    // Step 1: First get IDs and total count in a separate query
-    const whereClause: any = {};
-    
-    if (priority) whereClause.priority = priority;
+      // Step 1: First get IDs and total count in a separate query
+      const whereClause: any = {};
 
-    if (search) {
-      whereClause[Op.or] = [
-        { name: { [Op.like]: `%${search}%` } },
-        { farmNo: { [Op.like]: `%${search}%` } },
-      ];
-    }
+      if (priority) whereClause.priority = priority;
 
-    // Get total count WITHOUT includes first
-    const totalCount = await this.farmhouseModel.count({
-      where: whereClause
-    });
-
-    console.log(`Total farmhouses in DB: ${totalCount}`);
-
-    // If searching by location, we need to handle it differently
-    if (search) {
-      // Also check location for search
-      const farmhousesWithLocation = await this.farmhouseModel.findAll({
-        attributes: ['id'],
-        include: [{
-          model: Location,
-          as: 'location',
-          required: false,
-          where: {
-            address: { [Op.like]: `%${search}%` }
-          }
-        }],
-        where: whereClause,
-        raw: true
-      });
-
-      const locationSearchIds = farmhousesWithLocation
-        .filter(f => f['location.id']) // Has location matching search
-        .map(f => f.id);
-
-      // Add location search IDs to OR condition
-      if (locationSearchIds.length > 0) {
-        if (!whereClause[Op.or]) whereClause[Op.or] = [];
-        whereClause[Op.or].push({ id: { [Op.in]: locationSearchIds } });
+      if (search) {
+        whereClause[Op.or] = [
+          { name: { [Op.like]: `%${search}%` } },
+          { farmNo: { [Op.like]: `%${search}%` } },
+        ];
       }
-    }
 
-    // Step 2: Now fetch farmhouses with pagination
-    const farmhouses = await this.farmhouseModel.findAll({
-      where: whereClause,
-      include: [
-        {
-          model: Location,
-          as: 'location',
-          required: false,
-        },
-        {
-          model: FarmhouseImage,
-          as: 'images',
-          attributes: ['id', 'imagePath', 'isMain', 'ordering'],
-          separate: true, // Critical: loads separately to avoid duplication
-          order: [
-            ['ordering', 'ASC'],
-            ['isMain', 'DESC'],
-          ],
-        },
-      ],
-      order: [['createdAt', 'DESC']],
-      limit,
-      offset,
-      // Don't use subQuery: false unless absolutely necessary
-    });
-
-    console.log(`Found ${farmhouses.length} farmhouses after query`);
-
-    // Step 3: Get price options separately to avoid join issues
-    const farmhouseIds = farmhouses.map(f => f.id);
-    let priceOptionsMap = new Map<number, any[]>();
-
-    if (farmhouseIds.length > 0) {
-      const priceOptions = await this.priceOptionModel.findAll({
-        where: {
-          farmhouseId: { [Op.in]: farmhouseIds }
-        },
-        order: [['category', 'ASC']]
+      // Get total count WITHOUT includes first
+      const totalCount = await this.farmhouseModel.count({
+        where: whereClause
       });
 
-      // Group price options by farmhouseId
-      priceOptions.forEach(option => {
-        const farmhouseId = option.farmhouseId;
-        if (!priceOptionsMap.has(farmhouseId)) {
-          priceOptionsMap.set(farmhouseId, []);
+      console.log(`Total farmhouses in DB: ${totalCount}`);
+
+      // If searching by location, we need to handle it differently
+      if (search) {
+        // Also check location for search
+        const farmhousesWithLocation = await this.farmhouseModel.findAll({
+          attributes: ['id'],
+          include: [{
+            model: Location,
+            as: 'location',
+            required: false,
+            where: {
+              address: { [Op.like]: `%${search}%` }
+            }
+          }],
+          where: whereClause,
+          raw: true
+        });
+
+        const locationSearchIds = farmhousesWithLocation
+          .filter(f => f['location.id']) // Has location matching search
+          .map(f => f.id);
+
+        // Add location search IDs to OR condition
+        if (locationSearchIds.length > 0) {
+          if (!whereClause[Op.or]) whereClause[Op.or] = [];
+          whereClause[Op.or].push({ id: { [Op.in]: locationSearchIds } });
         }
-        priceOptionsMap.get(farmhouseId)!.push(option.toJSON());
+      }
+
+      // Step 2: Now fetch farmhouses with pagination
+      const farmhouses = await this.farmhouseModel.findAll({
+        where: whereClause,
+        include: [
+          {
+            model: Location,
+            as: 'location',
+            required: false,
+          },
+          {
+            model: FarmhouseImage,
+            as: 'images',
+            attributes: ['id', 'imagePath', 'isMain', 'ordering'],
+            separate: true, // Critical: loads separately to avoid duplication
+            order: [
+              ['ordering', 'ASC'],
+              ['isMain', 'DESC'],
+            ],
+          },
+        ],
+        order: [['createdAt', 'DESC']],
+        limit,
+        offset,
+        // Don't use subQuery: false unless absolutely necessary
       });
-    }
 
-    // Format Response
-    const formattedFarmhouses = farmhouses.map((farmhouse: any) => {
-      const data = farmhouse.toJSON();
-      return {
-        id: data.id,
-        name: data.name,
-        slug: data.slug,
-        maxPersons: data.maxPersons,
-        priority: data.priority,
-        bedrooms: data.bedrooms,
-        isRecomanded: data.isRecomanded,
-        isAmazing: data.isAmazing,
-        status: data.status,
-        farmNo: data.farmNo,
-        images: data.images?.map((img: any) => ({
-          id: img.id,
-          imagePath: img.imagePath,
-          isMain: img.isMain,
-          ordering: img.ordering,
-        })) || [],
-        location: data.location
-          ? {
-            id: data.location.id,
-            address: data.location.address,
-            city: data.location.city,
-            state: data.location.state,
-            latitude: data.location.latitude,
-            longitude: data.location.longitude,
+      console.log(`Found ${farmhouses.length} farmhouses after query`);
+
+      // Step 3: Get price options separately to avoid join issues
+      const farmhouseIds = farmhouses.map(f => f.id);
+      let priceOptionsMap = new Map<number, any[]>();
+
+      if (farmhouseIds.length > 0) {
+        const priceOptions = await this.priceOptionModel.findAll({
+          where: {
+            farmhouseId: { [Op.in]: farmhouseIds }
+          },
+          order: [['category', 'ASC']]
+        });
+
+        // Group price options by farmhouseId
+        priceOptions.forEach(option => {
+          const farmhouseId = option.farmhouseId;
+          if (!priceOptionsMap.has(farmhouseId)) {
+            priceOptionsMap.set(farmhouseId, []);
           }
-          : null,
-        rent: priceOptionsMap.get(data.id) || [],
-      };
-    });
+          priceOptionsMap.get(farmhouseId)!.push(option.toJSON());
+        });
+      }
 
-    return new ApiResponse(false, 'Farmhouses fetched successfully', {
-      farmhouses: formattedFarmhouses,
-      total: totalCount,
-      page,
-      limit,
-      totalPages: Math.ceil(totalCount / limit),
-    });
-  } catch (error) {
-    console.error('Error fetching farmhouses:', error);
-    return new ApiResponse(true, 'Error fetching farmhouses', error.message);
+      // Format Response
+      const formattedFarmhouses = farmhouses.map((farmhouse: any) => {
+        const data = farmhouse.toJSON();
+        return {
+          id: data.id,
+          name: data.name,
+          slug: data.slug,
+          maxPersons: data.maxPersons,
+          priority: data.priority,
+          bedrooms: data.bedrooms,
+          isRecomanded: data.isRecomanded,
+          isAmazing: data.isAmazing,
+          status: data.status,
+          farmNo: data.farmNo,
+          images: data.images?.map((img: any) => ({
+            id: img.id,
+            imagePath: img.imagePath,
+            isMain: img.isMain,
+            ordering: img.ordering,
+          })) || [],
+          location: data.location
+            ? {
+              id: data.location.id,
+              address: data.location.address,
+              nearby: data.location.nearby,
+              city: data.location.city,
+              state: data.location.state,
+              latitude: data.location.latitude,
+              longitude: data.location.longitude,
+            }
+            : null,
+          rent: priceOptionsMap.get(data.id) || [],
+        };
+      });
+
+      return new ApiResponse(false, 'Farmhouses fetched successfully', {
+        farmhouses: formattedFarmhouses,
+        total: totalCount,
+        page,
+        limit,
+        totalPages: Math.ceil(totalCount / limit),
+      });
+    } catch (error) {
+      console.error('Error fetching farmhouses:', error);
+      return new ApiResponse(true, 'Error fetching farmhouses', error.message);
+    }
   }
-}
 
   // Get All Farmhouses (Public) - Only images, locations, rent, maxPersons, bedrooms, isRecomanded, isAmazing
   async findAll(queryDto: QueryFarmhouseDto) {
@@ -260,6 +261,7 @@ export class ProductsService {
       const {
         search,
         city,
+        location,
         priority,
         bedrooms,
         minPrice,
@@ -279,9 +281,23 @@ export class ProductsService {
 
       // LOCATION FILTER
       const locationWhere: any = {};
-      if (city) locationWhere.city = city;
+
+      // Handle multiple locations (comma-separated cities)
+      if (location) {
+        const cities = location.split(',').map(c => c.trim()).filter(c => c.length > 0);
+        if (cities.length > 0) {
+          locationWhere.city = { [Op.in]: cities };
+        }
+      } else if (city) {
+        // Fallback to single city filter if location not provided
+        locationWhere.city = city;
+      }
+
       if (search) {
-        locationWhere.address = { [Op.like]: `%${search}%` };
+        locationWhere[Op.or] = [
+          { address: { [Op.like]: `%${search}%` } },
+          { nearby: { [Op.like]: `%${search}%` } },
+        ];
       }
 
       // PRICE FILTER
@@ -293,11 +309,12 @@ export class ProductsService {
       // ✅ ASC / DESC Logic Only
       let order: any[] = [];
 
-      // SEARCH: name OR location.address
+      // SEARCH: name OR location.address OR location.nearby
       if (search) {
         where[Op.or] = [
           { name: { [Op.like]: `%${search}%` } },
           { '$location.address$': { [Op.like]: `%${search}%` } },
+          { '$location.nearby$': { [Op.like]: `%${search}%` } },
         ];
       }
 
@@ -353,6 +370,7 @@ export class ProductsService {
             ? {
               id: f.location.id,
               address: f.location.address,
+              nearby: f.location.nearby,
               city: f.location.city,
               state: f.location.state,
               latitude: f.location.latitude,

@@ -1,11 +1,17 @@
-import { IsString, IsInt, IsEnum, IsOptional, IsBoolean, IsTimeZone, IsNotEmpty, Min, Max } from 'class-validator';
+import { IsString, IsInt, IsEnum, IsOptional, IsBoolean, IsTimeZone, IsNotEmpty, Min, Max, IsNumber } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 
 export class CreateLocationDto {
-  @ApiProperty({ description: 'Full address' })
+  @ApiPropertyOptional({ description: 'Full address' })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  address: string;
+  address?: string;
+
+  @ApiPropertyOptional({ description: 'Nearby landmark/area name', example: 'Adajan' })
+  @IsOptional()
+  @IsString()
+  nearby?: string;
 
   @ApiProperty({ description: 'City name' })
   @IsString()
@@ -19,10 +25,14 @@ export class CreateLocationDto {
 
   @ApiPropertyOptional({ description: 'Latitude' })
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
   latitude?: number;
 
   @ApiPropertyOptional({ description: 'Longitude' })
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
   longitude?: number;
 }
 
@@ -39,6 +49,7 @@ export class CreatePriceOptionDto {
     description: 'Price amount',
     example: 1200
   })
+  @Type(() => Number)
   @IsInt()
   @Min(0)
   price: number;
@@ -47,6 +58,7 @@ export class CreatePriceOptionDto {
     description: 'Maximum people allowed',
     example: 10
   })
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   maxPeople: number;
@@ -76,11 +88,13 @@ export class CreateFarmhouseDto {
   priority?: 'HIGH' | 'MEDIUM' | 'LOW';
 
   @ApiProperty({ description: 'Maximum persons capacity' })
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   maxPersons: number;
 
   @ApiProperty({ description: 'Number of bedrooms' })
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   bedrooms: number;

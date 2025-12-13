@@ -38,11 +38,11 @@ export class User extends Model<User> {
   @Column(DataType.STRING)
   declare mobileNo: string;
 
-  // Required: google / phone
+  // Required: google / phone / admin
   @AllowNull(false)
   @Default('phone')
-  @Column(DataType.ENUM('google', 'phone'))
-  declare loginType: 'google' | 'phone';
+  @Column(DataType.ENUM('google', 'phone', 'admin'))
+  declare loginType: 'google' | 'phone' | 'admin';
 
   // Optional
   @AllowNull(true)

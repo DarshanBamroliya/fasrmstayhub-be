@@ -18,9 +18,17 @@ export class QueryFarmhouseDto {
   @IsString()
   city?: string;
 
-  @ApiPropertyOptional({ 
-    description: 'Filter by priority', 
-    enum: ['HIGH', 'MEDIUM', 'LOW'] 
+  @ApiPropertyOptional({
+    description: 'Filter by multiple locations (comma-separated cities). Example: sayan,bardoli,dumas',
+    example: 'sayan,bardoli,dumas'
+  })
+  @IsOptional()
+  @IsString()
+  location?: string;
+
+  @ApiPropertyOptional({
+    description: 'Filter by priority',
+    enum: ['HIGH', 'MEDIUM', 'LOW']
   })
   @IsOptional()
   @IsEnum(['HIGH', 'MEDIUM', 'LOW'])

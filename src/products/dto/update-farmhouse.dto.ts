@@ -6,7 +6,9 @@ import {
   IsInt,
   Min,
   IsEnum,
+  IsNumber,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
 // ---------------------------
 // 🔹 Update Location DTO
@@ -16,6 +18,11 @@ export class UpdateLocationDto {
   @IsOptional()
   @IsString()
   address?: string;
+
+  @ApiPropertyOptional({ description: 'Nearby landmark/area name', example: 'Adajan' })
+  @IsOptional()
+  @IsString()
+  nearby?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -29,10 +36,14 @@ export class UpdateLocationDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
   latitude?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
   longitude?: number;
 }
 
@@ -49,12 +60,14 @@ export class UpdatePriceOptionDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(0)
   price?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   maxPeople?: number;
@@ -83,12 +96,14 @@ export class UpdateFarmhouseDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   maxPersons?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   bedrooms?: number;

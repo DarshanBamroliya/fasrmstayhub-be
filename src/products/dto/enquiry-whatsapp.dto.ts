@@ -1,9 +1,11 @@
 import { IsOptional, IsString, IsNotEmpty, IsNumber } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 
 export class EnquiryWhatsappDto {
   @ApiPropertyOptional({ description: 'Farmhouse ID to lookup owner phone' })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   farmhouseId?: number;
 

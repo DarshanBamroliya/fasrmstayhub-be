@@ -20,15 +20,22 @@ export class Location extends Model<Location> {
   @ForeignKey(() => Farmhouse)
   @Column({
     type: DataType.INTEGER,
-    allowNull: false,
+    allowNull: true, // Allow standalone locations without farmhouse
   })
   declare farmhouseId: number;
 
   @Column({
     type: DataType.TEXT,
-    allowNull: false,
+    allowNull: true, // Allow locations with just city/state
   })
   declare address: string;
+
+  @Column({
+    type: DataType.STRING,
+    allowNull: true,
+    comment: 'Nearby landmark/area name',
+  })
+  declare nearby: string;
 
   @Column({
     type: DataType.STRING,

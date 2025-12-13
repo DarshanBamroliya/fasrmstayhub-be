@@ -1,19 +1,17 @@
 import {
   Controller,
   Get,
-  Put,
   Post,
-  Body,
   UseGuards,
   UseInterceptors,
   UploadedFiles,
   Delete,
   Param,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiConsumes, ApiBody, ApiParam } from '@nestjs/swagger';
 import { SettingsService } from './settings.service';
-import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { ApiResponse as CustomApiResponse } from 'src/common/responses/api-response';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { Roles } from 'src/common/decorators/user.decorator';
@@ -51,35 +49,99 @@ const multerOptions = {
 @ApiTags('Settings')
 @Controller('api/settings')
 export class SettingsController {
-  constructor(private readonly settingsService: SettingsService) {}
+  constructor(private readonly settingsService: SettingsService) { }
+
+  // ============================================
+  // GET APIs - Public
+  // ============================================
 
   @Public()
-  @Get()
-  @ApiOperation({ summary: 'Get app settings (Public)' })
-  @ApiResponse({ status: 200, description: 'Settings fetched successfully.' })
-  async getSettings(): Promise<CustomApiResponse<any>> {
-    return this.settingsService.getSettings();
+  @Get('logo')
+  @ApiOperation({ summary: 'Get app logo (Public)' })
+  @ApiResponse({ status: 200, description: 'Logo fetched successfully.' })
+  async getLogo(): Promise<CustomApiResponse<any>> {
+    return this.settingsService.getLogo();
+  }
+
+  @Public()
+  @Get('login-image')
+  @ApiOperation({ summary: 'Get login dialog image (Public)' })
+  @ApiResponse({ status: 200, description: 'Login image fetched successfully.' })
+  async getLoginImage(): Promise<CustomApiResponse<any>> {
+    return this.settingsService.getLoginImage();
+  }
+
+  @Public()
+  @Get('hero-sliders')
+  @ApiOperation({ summary: 'Get hero slider images (Public)' })
+  @ApiResponse({ status: 200, description: 'Hero sliders fetched successfully.' })
+  async getHeroSliders(): Promise<CustomApiResponse<any>> {
+    return this.settingsService.getHeroSliders();
+  }
+
+  // ============================================
+  // POST APIs - Admin Only
+  // ============================================
+
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @Post('logo')
+  @UseInterceptors(FilesInterceptor('logo', 1, multerOptions))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload app logo (replaces existing) (Admin only)' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        logo: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Logo uploaded successfully.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async uploadLogo(
+    @UploadedFiles() files: MulterFile[],
+  ): Promise<CustomApiResponse<any>> {
+    return this.settingsService.uploadLogo(files[0]);
   }
 
   @UseGuards(JwtAuthGuard)
   @Roles(Role.ADMIN)
   @ApiBearerAuth()
-  @Put()
-  @ApiOperation({ summary: 'Update app settings (Admin only)' })
-  @ApiResponse({ status: 200, description: 'Settings updated successfully.' })
+  @Post('login-image')
+  @UseInterceptors(FilesInterceptor('image', 1, multerOptions))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload login dialog image (replaces existing) (Admin only)' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        image: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Login dialog image uploaded successfully.' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async updateSettings(@Body() updateSettingsDto: UpdateSettingsDto): Promise<CustomApiResponse<any>> {
-    return this.settingsService.updateSettings(updateSettingsDto);
+  async uploadLoginImage(
+    @UploadedFiles() files: MulterFile[],
+  ): Promise<CustomApiResponse<any>> {
+    return this.settingsService.uploadLoginImage(files[0]);
   }
 
-  // Upload Hero Slider Images/Videos (Admin only)
   @UseGuards(JwtAuthGuard)
   @Roles(Role.ADMIN)
   @ApiBearerAuth()
   @Post('hero-sliders')
   @UseInterceptors(FilesInterceptor('files', 10, multerOptions))
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Upload hero slider images and videos (Admin only)' })
+  @ApiOperation({ summary: 'Upload hero slider images/videos (adds to existing) (Admin only)' })
   @ApiBody({
     schema: {
       type: 'object',
@@ -102,78 +164,22 @@ export class SettingsController {
     return this.settingsService.uploadHeroSliders(files);
   }
 
-  // Upload Login Dialog Image (Admin only)
-  @UseGuards(JwtAuthGuard)
-  @Roles(Role.ADMIN)
-  @ApiBearerAuth()
-  @Post('login-dialog-image')
-  @UseInterceptors(FilesInterceptor('image', 1, multerOptions))
-  @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Upload login dialog image (Admin only)' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        image: {
-          type: 'string',
-          format: 'binary',
-        },
-      },
-    },
-  })
-  @ApiResponse({ status: 200, description: 'Login dialog image uploaded successfully.' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async uploadLoginDialogImage(
-    @UploadedFiles() files: MulterFile[],
-  ): Promise<CustomApiResponse<any>> {
-    return this.settingsService.uploadLoginDialogImage(files[0]);
-  }
+  // ============================================
+  // DELETE APIs - Admin Only
+  // ============================================
 
-  // Upload App Logo (Admin only)
   @UseGuards(JwtAuthGuard)
   @Roles(Role.ADMIN)
   @ApiBearerAuth()
-  @Post('logo')
-  @UseInterceptors(FilesInterceptor('logo', 1, multerOptions))
-  @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Upload app logo (Admin only)' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        logo: {
-          type: 'string',
-          format: 'binary',
-        },
-        mode: {
-          type: 'string',
-          enum: ['light', 'dark'],
-          description: 'Logo mode: light or dark',
-        },
-      },
-    },
-  })
-  @ApiResponse({ status: 200, description: 'Logo uploaded successfully.' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async uploadLogo(
-    @UploadedFiles() files: MulterFile[],
-    @Body() body: { mode: 'light' | 'dark' },
-  ): Promise<CustomApiResponse<any>> {
-    return this.settingsService.uploadLogo(files[0], body.mode);
-  }
-
-  // Delete Hero Slider Image (Admin only)
-  @UseGuards(JwtAuthGuard)
-  @Roles(Role.ADMIN)
-  @ApiBearerAuth()
-  @Delete('hero-sliders/:imageName')
-  @ApiOperation({ summary: 'Delete hero slider image (Admin only)' })
+  @Delete('hero-sliders/:id')
+  @ApiOperation({ summary: 'Delete hero slider image by ID (Admin only)' })
+  @ApiParam({ name: 'id', type: 'integer', description: 'Hero slider image ID' })
   @ApiResponse({ status: 200, description: 'Hero slider image deleted successfully.' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Hero slider not found.' })
   async deleteHeroSlider(
-    @Param('imageName') imageName: string,
+    @Param('id', ParseIntPipe) id: number,
   ): Promise<CustomApiResponse<any>> {
-    return this.settingsService.deleteHeroSlider(imageName);
+    return this.settingsService.deleteHeroSlider(id);
   }
 }
-

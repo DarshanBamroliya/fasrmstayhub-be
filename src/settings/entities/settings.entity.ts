@@ -8,7 +8,10 @@ import {
   Default,
   CreatedAt,
   UpdatedAt,
+  ForeignKey,
+  BelongsTo,
 } from 'sequelize-typescript';
+import { SettingsImage } from './settings-image.entity';
 
 @Table({ tableName: 'settings', timestamps: true })
 export class Settings extends Model<Settings> {
@@ -17,33 +20,38 @@ export class Settings extends Model<Settings> {
   @Column(DataType.INTEGER)
   declare id: number;
 
+  @ForeignKey(() => SettingsImage)
   @Column({
-    type: DataType.JSON,
+    type: DataType.INTEGER,
     allowNull: true,
-    comment: 'Hero section sliders - array of image URLs',
+    comment: 'App logo for light mode - reference to settings_images.id',
   })
-  heroSliders: string[];
+  declare appLogoLightId: number;
 
+  @ForeignKey(() => SettingsImage)
   @Column({
-    type: DataType.STRING,
+    type: DataType.INTEGER,
     allowNull: true,
-    comment: 'App logo for light mode',
+    comment: 'App logo for dark mode - reference to settings_images.id',
   })
-  appLogoLight: string;
+  declare appLogoDarkId: number;
 
+  @ForeignKey(() => SettingsImage)
   @Column({
-    type: DataType.STRING,
+    type: DataType.INTEGER,
     allowNull: true,
-    comment: 'App logo for dark mode',
+    comment: 'Login dialog image - reference to settings_images.id',
   })
-  appLogoDark: string;
+  declare loginDialogImageId: number;
 
-  @Column({
-    type: DataType.STRING,
-    allowNull: true,
-    comment: 'Login dialog image',
-  })
-  loginDialogImage: string;
+  @BelongsTo(() => SettingsImage, { foreignKey: 'appLogoLightId', as: 'appLogoLight' })
+  declare appLogoLight: SettingsImage;
+
+  @BelongsTo(() => SettingsImage, { foreignKey: 'appLogoDarkId', as: 'appLogoDark' })
+  declare appLogoDark: SettingsImage;
+
+  @BelongsTo(() => SettingsImage, { foreignKey: 'loginDialogImageId', as: 'loginDialogImage' })
+  declare loginDialogImage: SettingsImage;
 
   @CreatedAt
   @Column({ type: DataType.DATE })
