@@ -1,7 +1,7 @@
 import { IsString, IsInt, IsEnum, IsOptional, IsBoolean, IsTimeZone, IsNotEmpty, Min, Max, IsNumber } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { CreateLocationApiDto } from '../../locations/dto/create-location.dto';
+import { CreateLocationDto } from '../../locations/dto/create-location.dto';
 
 export class CreatePriceOptionDto {
   @ApiProperty({ 
@@ -96,9 +96,9 @@ export class CreateFarmhouseDto {
   @IsBoolean()
   isAmazing?: boolean;
 
-  @ApiPropertyOptional({ type: CreateLocationApiDto, description: 'Location details' })
+  @ApiPropertyOptional({ type: CreateLocationDto, description: 'Location details' })
   @IsOptional()
-  location?: CreateLocationApiDto;
+  location?: CreateLocationDto;
 
   @ApiPropertyOptional({ 
     type: [CreatePriceOptionDto], 
