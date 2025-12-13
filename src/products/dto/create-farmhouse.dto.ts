@@ -1,40 +1,7 @@
 import { IsString, IsInt, IsEnum, IsOptional, IsBoolean, IsTimeZone, IsNotEmpty, Min, Max, IsNumber } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-
-export class CreateLocationDto {
-  @ApiPropertyOptional({ description: 'Full address' })
-  @IsOptional()
-  @IsString()
-  address?: string;
-
-  @ApiPropertyOptional({ description: 'Nearby landmark/area name', example: 'Adajan' })
-  @IsOptional()
-  @IsString()
-  nearby?: string;
-
-  @ApiProperty({ description: 'City name' })
-  @IsString()
-  @IsNotEmpty()
-  city: string;
-
-  @ApiProperty({ description: 'State name' })
-  @IsString()
-  @IsNotEmpty()
-  state: string;
-
-  @ApiPropertyOptional({ description: 'Latitude' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  latitude?: number;
-
-  @ApiPropertyOptional({ description: 'Longitude' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  longitude?: number;
-}
+import { CreateLocationApiDto } from '../../locations/dto/create-location.dto';
 
 export class CreatePriceOptionDto {
   @ApiProperty({ 
@@ -129,9 +96,9 @@ export class CreateFarmhouseDto {
   @IsBoolean()
   isAmazing?: boolean;
 
-  @ApiPropertyOptional({ type: CreateLocationDto, description: 'Location details' })
+  @ApiPropertyOptional({ type: CreateLocationApiDto, description: 'Location details' })
   @IsOptional()
-  location?: CreateLocationDto;
+  location?: CreateLocationApiDto;
 
   @ApiPropertyOptional({ 
     type: [CreatePriceOptionDto], 
