@@ -4,7 +4,7 @@ import { Location } from '../products/entities/location.entity';
 import { Farmhouse } from '../products/entities/farmhouse.entity';
 import { FarmhouseImage } from '../products/entities/farmhouse-image.entity';
 import { PriceOption } from '../products/entities/price-option.entity';
-import { CreateLocationDto } from './dto/create-location.dto';
+import { CreateLocationApiDto } from './dto/create-location.dto';
 import { ApiResponse } from 'src/common/responses/api-response';
 
 @Injectable()
@@ -17,17 +17,17 @@ export class LocationsService {
     ) { }
 
     // Create a new location (Admin only)
-    async create(createLocationDto: CreateLocationDto) {
+    async create(CreateLocationApiDto: CreateLocationApiDto) {
         try {
             // Check if location with same city and state already exists
             // Build a where clause that only includes nearby when provided,
             // to avoid passing null (which breaks TS typing for Sequelize where)
             const where: any = {
-                city: createLocationDto.city,
-                state: createLocationDto.state,
+                city: CreateLocationApiDto.city,
+                state: CreateLocationApiDto.state,
             };
-            if (createLocationDto.nearby) {
-                where.nearby = createLocationDto.nearby;
+            if (CreateLocationApiDto.nearby) {
+                where.nearby = CreateLocationApiDto.nearby;
             }
 
             const existingLocation = await this.locationModel.findOne({ where });
@@ -42,9 +42,9 @@ export class LocationsService {
 
             // Create location with explicit null values for optional fields
             const location = await this.locationModel.create({
-                city: createLocationDto.city,
-                state: createLocationDto.state,
-                nearby: createLocationDto.nearby || null,
+                city: CreateLocationApiDto.city,
+                state: CreateLocationApiDto.state,
+                nearby: CreateLocationApiDto.nearby || null,
                 address: null,
                 latitude: null,
                 longitude: null,

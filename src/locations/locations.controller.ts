@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Body, UseGuards, Param } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { LocationsService } from './locations.service';
-import { CreateLocationDto } from './dto/create-location.dto';
+import { CreateLocationApiDto } from './dto/create-location.dto';
 import { ApiResponse as CustomApiResponse } from 'src/common/responses/api-response';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { Roles } from 'src/common/decorators/user.decorator';
@@ -22,9 +22,9 @@ export class LocationsController {
     @ApiResponse({ status: 201, description: 'Location created successfully.' })
     @ApiResponse({ status: 401, description: 'Unauthorized' })
     async create(
-        @Body() createLocationDto: CreateLocationDto,
+        @Body() CreateLocationApiDto: CreateLocationApiDto,
     ): Promise<CustomApiResponse<any>> {
-        return this.locationsService.create(createLocationDto);
+        return this.locationsService.create(CreateLocationApiDto);
     }
 
     // Get All Locations (Public)

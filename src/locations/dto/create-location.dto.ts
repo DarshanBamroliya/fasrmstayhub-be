@@ -1,7 +1,7 @@
 import { IsNotEmpty, IsString, IsOptional, IsNumber } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-export class CreateLocationDto {
+export class CreateLocationApiDto {
     @ApiProperty({ description: 'Nearby landmark/area name', example: 'Adajan' })
     @IsOptional()
     @IsString()
